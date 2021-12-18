@@ -1,14 +1,9 @@
 import torch
 import torch.nn as nn
-from geoml import nnj
-from geoml import *
 import time
 import json
-import pickle
-import math
-import collections
-from tqdm import tqdm
 import os, argparse
+import utils
 import torch.nn.functional as F
 from scipy.stats import ortho_group
 from tensorboardX import SummaryWriter
@@ -21,81 +16,56 @@ from score.score import compute_is_and_fid
 import numpy as np
 from torchvision import datasets, transforms
 import torchplot as plt
-from sklearn.cluster import KMeans
 import torch.distributions as td
 import random
 
 
-class InfiniteDataLoader(object):
-    """docstring for InfiniteDataLoader"""
-
-    def __init__(self, dataloader):
-        super(InfiniteDataLoader, self).__init__()
-        self.dataloader = dataloader
-        self.data_iter = None
-
-    def next(self):
-        try:
-            data = self.data_iter.next()
-        except Exception:
-            # Reached end of the dataset
-            self.data_iter = iter(self.dataloader)
-            data = self.data_iter.next()
-
-        return data
-
-    def __len__(self):
-        return len(self.dataloader)
 class EnergyModel(nn.Module):
     def __init__(self, dim=512):
         super().__init__()
-        self.main = nn.Sequential(
-            nn.utils.spectral_norm(nn.Conv2d(3, dim // 8, 3, 1, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 8, 4, 2, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 4, 3, 1, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 4, 4, 2, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 2, 3, 1, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim // 2, 4, 2, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim, 3, 1, 1)),
-            nn.LeakyReLU(0.1, inplace=True),
-        )
-        self.expand = nn.utils.spectral_norm(nn.Linear(4 * 4 * dim, 1))
-        #self.apply(weights_init)
+        if args.sn==True:
+            self.main = nn.Sequential(
+                nn.utils.spectral_norm(nn.Conv2d(3, dim // 8, 3, 1, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 8, 4, 2, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 4, 3, 1, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 4, 4, 2, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 2, 3, 1, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim // 2, 4, 2, 1)),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim, 3, 1, 1)),
+                nn.LeakyReLU(0.1, inplace=True)
+            )
+            self.expand = nn.utils.spectral_norm(nn.Linear(4 * 4 * dim, 1))
 
+        else:
+            self.main = nn.Sequential(
+                nn.Conv2d(3, dim // 8, 3, 1, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 8, dim // 8, 4, 2, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 8, dim // 4, 3, 1, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 4, dim // 4, 4, 2, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 4, dim // 2, 3, 1, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 2, dim // 2, 4, 2, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(dim // 2, dim, 3, 1, 1),
+                nn.LeakyReLU(0.1, inplace=True),
+            )
+            self.expand = nn.Linear(4 * 4 * dim, 1)
+        self.l = nn.Linear(1, 1, bias=False)
     def forward(self, x):
         out = self.main(x).view(x.size(0), -1)
-        return self.expand(out).squeeze(-1)
-class EnergyModel2(nn.Module):
-    def __init__(self, dim=512):
-        super().__init__()
-        self.main = nn.Sequential(
-            nn.Conv2d(3, dim // 8, 3, 1, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 8, dim // 8, 4, 2, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 8, dim // 4, 3, 1, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 4, dim // 4, 4, 2, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 4, dim // 2, 3, 1, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 2, dim // 2, 4, 2, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(dim // 2, dim, 3, 1, 1),
-            nn.LeakyReLU(0.1, inplace=True),
-        )
-        self.expand = nn.Linear(4 * 4 * dim, 1)
-        #self.apply(weights_init)
+        out = self.l(self.expand(out)).squeeze(-1)
+        return out
 
-    def forward(self, x):
-        out = self.main(x).view(x.size(0), -1)
-        return self.expand(out).squeeze(-1)
 class Generator(nn.Module):
     def __init__(self, z_dim=128, dim=512):
         super().__init__()
@@ -103,26 +73,26 @@ class Generator(nn.Module):
 
         self.main = nn.Sequential(
             nn.ConvTranspose2d(dim, dim // 2, 4, 2, 1),
-            nn.BatchNorm2d(dim // 2,momentum=0.1),
+            nn.BatchNorm2d(dim // 2),
             nn.ReLU(True),
             nn.ConvTranspose2d(dim // 2, dim // 4, 4, 2, 1),
-            nn.BatchNorm2d(dim // 4,momentum=0.1),
+            nn.BatchNorm2d(dim // 4),
             nn.ReLU(True),
             nn.ConvTranspose2d(dim // 4, dim // 8, 4, 2, 1),
-            nn.BatchNorm2d(dim // 8,momentum=0.1),
+            nn.BatchNorm2d(dim // 8),
             nn.ReLU(True),
             nn.ConvTranspose2d(dim // 8, 3, 3, 1, 1),
             nn.Tanh(),
         )
-        #self.apply(weights_init)
+        #self.apply(utils.weights_init)
 
     def forward(self, z):
         out = self.expand(z).view(z.size(0), -1, 4, 4)
         return self.main(out)
 
-class EBM(nn.Module):
+class EBM_0GP(nn.Module):
     def __init__(self, args, device='cpu'):
-        super(EBM, self).__init__()
+        super(EBM_0GP, self).__init__()
         self.device = device
         self.d = args.z_dim
         self.batch_size = args.batch_size
@@ -130,21 +100,10 @@ class EBM(nn.Module):
         self.result_dir = args.result_dir
         self.dataset = args.dataset
         self.log_dir = args.log_dir
-        self.gpu_mode = args.gpu_mode
         self.model_name = args.gan_type
-        self.sample_z_ = torch.randn((self.batch_size, self.d))
-        if self.gpu_mode:
-            self.sample_z_ = self.sample_z_.cuda()
-        # Set up mean discriminator/generator
-        if args.sn==True:
-            self.disc = EnergyModel()
-        else:
-            self.disc = EnergyModel2()
+        self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
+        self.disc = EnergyModel()
         self.gen = Generator(self.d)
-
-        if self.gpu_mode:
-            self.gen.cuda()
-            self.disc.cuda()
         self.to(self.device)
 
         if args.ngpu > 1:
@@ -152,11 +111,8 @@ class EBM(nn.Module):
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
     def trainer(self, data_loader, iters=50):
-        #self.load()
         optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, 0.9), lr=args.lrd)
         optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, 0.9), lr=args.lrg)
-        d_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer_d, milestones=args.milestone, gamma=args.gammad)
-        g_lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer_g, milestones=args.milestone, gamma=args.gammag)
         sum_loss_d = 0
         sum_loss_g = 0
         writer = SummaryWriter(log_dir=self.log_dir)
@@ -164,26 +120,19 @@ class EBM(nn.Module):
             epoch = (iteration) // len(data_loader)
             e_costs = []
             g_costs = []
-            # for batch_idx, (data,) in enumerate(data_loader):
+            #energy function
             for i in range(args.energy_model_iters):
-                optimizer_d.zero_grad()
                 data = data_loader.next()[0].cuda()
                 data = data.to(self.device)
                 data.requires_grad_()
-                # discriminator
-                # for i in range(n_disc):
-                z_train = torch.randn((data.shape[0], self.d))
-                if self.gpu_mode:
-                    z_train = z_train.cuda()
-                    #torch.save(z_train, os.path.join(self.save_dir, 'z_train.pkl'))
-                    #torch.save(self.disc.state_dict(), os.path.join(self.save_dir, 'd.pkl'))
+                z_train = torch.randn((data.shape[0], self.d)).to(self.device)
                 G_z = self.gen(z_train)
                 d_real = self.disc(data)
-                d_fake = self.disc(G_z)
+                d_fake = self.disc(G_z.detach())
                 gradients = torch.autograd.grad(
-                    outputs=d_fake,
-                    inputs=G_z,
-                    grad_outputs=torch.ones_like(d_fake),
+                    outputs=d_real,
+                    inputs=data,
+                    grad_outputs=torch.ones_like(d_real),
                     allow_unused=True,
                     create_graph=True,
                 )[0]
@@ -191,8 +140,8 @@ class EBM(nn.Module):
                 # L2 norm
                 gp_loss = (gradients.norm(2, dim=1) ** 2).mean()
                 D_loss = (d_real - d_fake).mean() + gp_loss * args.gp_weight
-                # D_loss2 = (-d_real2 + d_fake2).mean()
                 e_costs.append([d_real.mean().item(), d_fake.mean().item(),D_loss.item(), gp_loss.item()])
+                optimizer_d.zero_grad()
                 D_loss.backward()
                 optimizer_d.step()
             d_real_mean, d_fake_mean,  D_loss_mean, gp_loss_mean= np.mean(e_costs[-args.energy_model_iters:], 0)
@@ -200,49 +149,35 @@ class EBM(nn.Module):
 
             # generator
             for i in range(args.generator_iters):
-                optimizer_g.zero_grad()
-                z_train = torch.randn((data.shape[0], self.d))
-                if self.gpu_mode:
-                    z_train = z_train.cuda()
-                    z_train.requires_grad_()
+                z_train = torch.randn((data.shape[0], self.d)).to(self.device)
+                z_train.requires_grad_()
                 fake= self.gen(z_train)
                 d_fake_g = self.disc(fake)
-                #J=self.fd_jacobian(self.gen,z_train)
-                #J = self.compute_jacobian(fake,z_train)
-                #J = self.batch_jacobian(z_train)
-                # loc = torch.zeros(z_train.shape[-1])
-                # scale = torch.ones(z_train.shape[-1])
-                # normal = td.Normal(loc, scale)
-                # logpz = td.Independent(normal, 1).log_prob(z_train.squeeze().cpu())
-                #jtj = torch.bmm(J,torch.transpose(J, -2, -1))
-                #JTJ = (-0.5 * torch.slogdet(jtj)[1])
-                # H=-(logpz.cuda()+JTJ)
-                #H = - JTJ
-                H,mu=self.compute_entropy_s(z_train,iteration)
-                #H, mu = self.compute_entropy_adam(z_train)
+                if args.train_mode == 'evals':
+                    H,mu=self.compute_entropy_s(z_train)
+                elif args.train_mode == 'acc':
+                    H, mu = self.compute_entropy_acc(z_train)
                 g_loss = d_fake_g.mean()-H.mean()*args.H_weight
                 g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item(),\
                                 mu.mean().item()])
+                optimizer_g.zero_grad()
                 g_loss.backward()
                 optimizer_g.step()
             d_fake_g_mean, g_loss_mean, H_mean, mu_mean\
                 = np.mean(g_costs[-args.generator_iters:], 0)
             sum_loss_g += g_loss_mean.item() * len(data)
-            if (iteration+1) % len(data_loader) ==0:
-                d_lr_scheduler.step()
-                g_lr_scheduler.step()
+
             if iteration % 250 == 0:
                 writer.add_scalars('d_logit_mean', {'r_logit_mean': d_real_mean,
                                                     'f_logit_mean': d_fake_mean,
                                                     'G_f_logit_mean': d_fake_g_mean}, iteration)
-                writer.add_scalars('singular_value', {'s_mean': mu_mean}, iteration)
                 writer.add_scalar('D_loss', D_loss_mean, iteration)
                 writer.add_scalar('g_loss', g_loss_mean, iteration)
                 writer.add_scalar('gp_loss', gp_loss_mean, iteration)
                 writer.add_scalar('H', H_mean, iteration)
             if iteration % (len(data_loader)) == 0:
                 with torch.no_grad():
-                    self.visualize_results((epoch))
+                    self.visualize_results(epoch)
             if (iteration) % (len(data_loader)) == 0:
                 avg_loss_d = sum_loss_d / len(data_loader) / args.batch_size
                 avg_loss_g = sum_loss_g / len(data_loader) / args.batch_size
@@ -252,48 +187,8 @@ class EBM(nn.Module):
                 sum_loss_g = 0
             if (iteration+1) % (20*len(data_loader)) == 0:
                 self.save(epoch)
-            # if batch_idx % 50 == 0:
-            # summary_defaultdict2txtfig(default_dict=summary_d, prefix='GAN', step=epoch*len(data_loader) + batch_idx,
-            # textlogger=self.myargs.textlogger, save_fig_sec=60)
 
-    def fd_jacobian(self,function, x, h=1e-4):
-        """Compute finite difference Jacobian of given function
-        at a single location x. This function is mainly considered
-        useful for debugging."""
-
-        no_batch = x.dim() == 1
-        if no_batch:
-            x = x.unsqueeze(0)
-        elif x.dim() > 2:
-            raise Exception("The input should be a D-vector or a BxD matrix")
-        B, D = x.shape
-
-        # Compute finite differences
-        E = h * torch.eye(D)
-        E=E.to(self.device)
-        try:
-            # Disable "training" in the function (relevant eg. for batch normalization)
-            orig_state = function.eval()
-            Jnum = torch.cat([((function(x[b] + E) - function(x[b].unsqueeze(0))) / h).unsqueeze(0)
-                              for b in range(B)])
-            Jnum=Jnum.view(Jnum.shape[0],Jnum.shape[1],-1)
-        finally:
-            function.train()  # re-enable training
-
-        if no_batch:
-            Jnum = Jnum.squeeze(0)
-
-        return Jnum
-    def compute_entropy(self,fake):
-        fake=fake.view(fake.shape[0],-1)
-        pz=2/(1+fake.norm(2,-1)).unsqueeze(-1)
-        s=torch.cat((fake*pz,1-pz),-1)
-        logps=s.mm((s.mean(0)/(s.mean(0).norm(2))).unsqueeze(-1))
-        logjtj=torch.log(pz)
-        logpg=logps+logjtj
-        H=-logpg.mean()
-        return H
-    def compute_entropy_s(self, z,iter,ds=1):
+    def compute_entropy_s(self, z):
         self.gen.eval()
         v = torch.randn(z.shape).to(self.device)
         p = torch.randn(z.shape).to(self.device)
@@ -317,20 +212,14 @@ class EBM(nn.Module):
         #     print(iter)
         #     print(self.v)
         where_is_nan = torch.isnan(mu)
-        if len(mu[where_is_nan]) > 0:
-            print(iter)
-            print(Jv.norm(2, dim=(1,2,3)))
-            print(self.v.norm(2, dim=-1))
-            print(mu)
-            return
-        # else:
-        #     torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'g.pkl'))
-        #     torch.save(self.v, os.path.join(self.save_dir, 'v.pkl'))
-        #     torch.save(z, os.path.join(self.save_dir, 'z.pkl'))
-        est = (self.d / ds) * torch.log(mu)
+
+        est = self.d  * torch.log(mu)
         H = est.unsqueeze(-1)
         self.gen.train()
         return H,mu
+
+    #def compute_entropy_s(self, z,ds=1):
+
     def compute_entropy_adam(self, z,ds=1):
         self.gen.eval()
         #fake2=self.gen(z)
@@ -578,44 +467,39 @@ if __name__ == "__main__":
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
         os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    desc = "Pytorch implementation of GAN collections"
+    desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--gan_type', type=str, default='EBM',
-                        choices=['GAN', 'CGAN', 'infoGAN', 'ACGAN', 'EBGAN', 'BEGAN', 'WGAN', 'WGAN_GP', 'DRAGAN',
-                                 'LSGAN'], help='The type of GAN')
+                        choices=['EBM_BB', 'EBM_0GP'], help='The type of EBM')
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['mnist', 'fashion-mnist', 'cifar10', 'cifar100', 'svhn', 'stl10', 'lsun-bed'],
+                        choices=['mnist', 'fashion-mnist', 'cifar10', 'cifar100', 'svhn'],
                         help='The name of dataset')
-    parser.add_argument('--mode', type=str, default='ebmpr', help='mode')
+    parser.add_argument('--mode', type=str, default='train',
+                        choices=['train',  'ebmpr'],help='mode')
     parser.add_argument("--seed", type=int, default=49)
     parser.add_argument("--bn", type=bool, default=True)
-    parser.add_argument("--sn", type=bool, default=False)
+    parser.add_argument("--sn", type=bool, default=True)
     parser.add_argument('--epoch', type=int, default=100, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of batch')
     parser.add_argument('--input_size', type=int, default=32, help='The size of input image')
     parser.add_argument("--lrd", type=int, default=2e-4)
     parser.add_argument("--lrg", type=int, default=2e-4)
-    parser.add_argument("--gammad", type=int, default=1)
-    parser.add_argument("--gammag", type=int, default=1)
-    parser.add_argument("--milestone", type=float, default=[70])
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
-    parser.add_argument("--cl", type=int, default=4)
-    parser.add_argument("--gp_weight", type=float, default=0.1)
+    parser.add_argument("--gp_weight", type=float, default=0.001)
     parser.add_argument("--H_weight", type=int, default=1)
     parser.add_argument('--save_dir', type=str, default='models',
                         help='Directory name to save the model')
     parser.add_argument('--result_dir', type=str, default='results', help='Directory name to save the generated images')
     parser.add_argument('--log_dir', type=str, default='logs', help='Directory name to save training logs')
     parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
-    parser.add_argument('--gpu_mode', type=bool, default=True)
     parser.add_argument('--benchmark_mode', type=bool, default=True)
 
     args = parser.parse_args()
     # --save_dir
 
-    if args.mode == 'train' and is_debugging() == False:
+    if args.mode == 'train' and utils.is_debugging() == False:
         time = int(time.time())
         args.save_dir = os.path.join(args.save_dir + '/' + args.dataset + '/'
                 + args.gan_type + '/%03d' % args.z_dim +'/%02d' % args.energy_model_iters+ '/%03d' % time)
@@ -636,7 +520,7 @@ if __name__ == "__main__":
 
         with open("{}/args.txt".format(args.result_dir), 'w') as f:
             json.dump(args.__dict__, f, indent=4, sort_keys=True)
-    elif is_debugging() == True:
+    elif utils.is_debugging() == True:
         args.save_dir = os.path.join(args.save_dir + '/debug')
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
@@ -665,50 +549,35 @@ if __name__ == "__main__":
         assert args.batch_size >= 1
     except:
         print('batch size must be larger than or equal to one')
-    setup_seed(args.seed)
-    # layers = torch.linspace(28**2, 64, 3).int()
-    #layers=[3072,4096,1024,512,64]
-    #layers = [3, 64,128,256,512,64]
-    label_thresh = 4  # include only a subset of MNIST classes
+    utils.setup_seed(args.seed)
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
     ## Data
-    transform = transforms.Compose([transforms.Resize((args.input_size, args.input_size)), transforms.RandomHorizontalFlip(),
+    transform = transforms.Compose([transforms.Resize((args.input_size, args.input_size)),
+                                    transforms.RandomHorizontalFlip(),
                                     transforms.ToTensor(),
                                     transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     test_transform = transforms.Compose(
         [transforms.Resize((args.input_size, args.input_size)),
          transforms.ToTensor(),
          transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-
-    #cifar10_train = datasets.CIFAR10('/home/cong/code/geoml_gan/data/cifar10', train=True, download=True, transform=transform)
-    cifar10_train = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=True, download=True,
+    if args.dataset=='cifar10':
+        cifar10_train = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=True, download=True,
                                      transform=transform)
-    #x_train = transform((mnist_train.data) / 255).reshape(-1, 784)
-    #y_train = mnist_train.targets
-    #idx = y_train < label_thresh  # only use digits 0, 1, 2, ...
-    #num_classes = y_train[idx].unique().numel()
-    #x_train = x_train[idx]
-    #y_train = y_train[idx]
-    # x_train = x_train[idx][:subset_size]
-    # y_train = y_train[idx][:subset_size]
-    #N = x_train.shape[0]
-    #train_data = torch.utils.data.TensorDataset(x_train)
+
     train_loader = torch.utils.data.DataLoader(cifar10_train, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    train_loader = dict(train=InfiniteDataLoader(train_loader))
+    train_loader = dict(train=utils.InfiniteDataLoader(train_loader))
     # Fit model
-    model = EBM(args, device)
-    iters = args.epoch * len(train_loader['train'])
-    # max_iter=args.epoch*len(train_loader)*args.energy_model_iters
-    # pbar = zip(train_loader, range(0, max_iter))
-    # iter = iter(train_loader['train'])
-    #model.trainer(train_loader['train'], iters)
-    cifar10_test = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=False, download=True,
+    model = EBM_BB(args, device)
+    if args.mode == 'train':
+        iters = args.epoch * len(train_loader['train'])
+        model.trainer(train_loader['train'], iters)
+    elif args.mode == 'ebmpr':
+        cifar10_test = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=False, download=True,
                                      transform=test_transform)
-    test_loader = torch.utils.data.DataLoader(cifar10_test, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    model.compute_ebmpr(test_loader)
-    # model.refineD(train_loader, args.epoch)
-    # model.compute_pr_high()
+        test_loader = torch.utils.data.DataLoader(cifar10_test, batch_size=args.batch_size, shuffle=False, drop_last=False)
+        model.compute_ebmpr(test_loader)
+
 
 
 

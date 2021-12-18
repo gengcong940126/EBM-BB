@@ -154,7 +154,7 @@ class EBM_0GP(nn.Module):
             logpx = logpx - logpx.logsumexp(0)
             px = logpx.cpu().detach().numpy().reshape(npts, npts)
 
-        ax.imshow(px)
+        ax.imshow(px, origin='lower', extent=[low, high, low, high])
         ax.set_title(title)
 
     def visualize_results(self, points, epoch, fix=True):
@@ -210,8 +210,8 @@ class EBM_0GP(nn.Module):
 
     def compute_ebmpr(self):
 
-        pkl_path_d = '/home/cong/code/geoml_gan/models/25gaussians/EBM_0gp/01/1623190533/epoch279_d.pkl'
-        pkl_path_g = '/home/cong/code/geoml_gan/models/25gaussians/EBM_0gp/01/1623190533/epoch279_g.pkl'
+        pkl_path_d = '/home/congen/code/EBM-BB/models/25gaussians/EBM_0GP/01/1639843173/epoch149999_d.pkl'
+        pkl_path_g = '/home/congen/code/EBM-BB/models/25gaussians/EBM_0GP/01/1639843173/epoch149999_g.pkl'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
         self.disc.eval()
@@ -658,7 +658,7 @@ if __name__ == "__main__":
     """
     Usage:
 
-        export CUDA_VISIBLE_DEVICES=5
+        export CUDA_VISIBLE_DEVICES=3
         export PORT=6006
         export CUDA_HOME=/opt/cuda/cuda-10.2
         export TIME_STR=1
@@ -671,15 +671,15 @@ if __name__ == "__main__":
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
         os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     os.environ['CUDA_HOME'] = '/opt/cuda/cuda-10.2'
-    desc = "Pytorch implementation of GAN collections"
+    desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--gan_type', type=str, default='EBM_BB',
-                        choices=['EBM_BB','EBM_OGP'],
-                        help='The type of GAN')
-    parser.add_argument('--dataset', type=str, default='25gaussians',
+    parser.add_argument('--gan_type', type=str, default='EBM_0GP',
+                        choices=['EBM_BB','EBM_0GP'],
+                        help='The type of EBM')
+    parser.add_argument('--dataset', type=str, default='swiss_roll',
                         choices=['swiss_roll',  'two_moon', '25gaussians'],
                         help='The name of dataset')
-    parser.add_argument('--mode', type=str, default='ebmpr',
+    parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'], help='mode')
     parser.add_argument('--iters', type=int, default=150001, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=200, help='The size of batch')
@@ -687,7 +687,8 @@ if __name__ == "__main__":
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
     parser.add_argument("--momentum", type=float, default=0.9)
-    parser.add_argument('--train_mode', type=str, default='acc', help='mode')
+    parser.add_argument('--train_mode', type=str, default='mins',
+                        choices=['acc',  'mins'],help='mode')
     parser.add_argument("--bn", type=bool, default=True)
     parser.add_argument("--sn", type=bool, default=True)
     parser.add_argument("--ada", type=bool, default=True)
@@ -759,14 +760,13 @@ if __name__ == "__main__":
         print('batch size must be larger than or equal to one')
     utils.setup_seed(args.seed)
     layers = [2, 100, 100, 2]
-    label_thresh = 2  # include only a subset of MNIST classes
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-    model = EBM_BB(args, layers, device)
+    model = EBM_0GP(args, layers, device)
 
     if args.mode == 'train':
         model.trainer(args.iters)
-    # model.refineD(train_loader, args.epoch)
+
     elif args.mode == 'ebmpr':
         model.compute_ebmpr()
     elif args.mode == 'plot_pr':

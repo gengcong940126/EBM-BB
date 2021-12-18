@@ -21,8 +21,8 @@ def data_process(dataset,batch_size):
         data = np.array(data[:batch_size], dtype='float32')
         np.random.shuffle(data)
         data /= 2.828
-        data = torch.Tensor(data)
-        return data
+    data = torch.Tensor(data)
+    return data
 
 class InfiniteDataLoader(object):
     """docstring for InfiniteDataLoader"""
