@@ -4,15 +4,17 @@ import time
 import json
 import os, argparse
 import utils
+import data
 import torch.nn.functional as F
 from scipy.stats import ortho_group
 from tensorboardX import SummaryWriter
 import torchvision.utils as vutils
-from score.inception_network import InceptionV3
-from score.fid_score import calculate_frechet_distance
-from score.inception_score import kl_scores
-from score.F_beta import calculate_f_beta_score,plot_pr_curve
-from score.score import compute_is_and_fid
+from stochman import nnj
+# from score.inception_network import InceptionV3
+# from score.fid_score import calculate_frechet_distance
+# from score.inception_score import kl_scores
+# from score.F_beta import calculate_f_beta_score,plot_pr_curve
+# from score.score import compute_is_and_fid
 import numpy as np
 from torchvision import datasets, transforms
 import torchplot as plt
@@ -69,26 +71,27 @@ class EnergyModel(nn.Module):
 class Generator(nn.Module):
     def __init__(self, z_dim=128, dim=512):
         super().__init__()
-        self.expand = nn.Linear(z_dim, 4 * 4 * dim)
 
-        self.main = nn.Sequential(
-            nn.ConvTranspose2d(dim, dim // 2, 4, 2, 1),
-            nn.BatchNorm2d(dim // 2),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(dim // 2, dim // 4, 4, 2, 1),
-            nn.BatchNorm2d(dim // 4),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(dim // 4, dim // 8, 4, 2, 1),
-            nn.BatchNorm2d(dim // 8),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(dim // 8, 3, 3, 1, 1),
-            nn.Tanh(),
+        self.main = nnj.Sequential(
+            nnj.Linear(z_dim, 4 * 4 * dim),
+            nnj.Reshape(-1,4,4),
+            nnj.ConvTranspose2d(dim, dim // 2, 4, 2, 1),
+            nnj.BatchNorm2d(dim // 2),
+            nnj.ReLU(True),
+            nnj.ConvTranspose2d(dim // 2, dim // 4, 4, 2, 1),
+            nnj.BatchNorm2d(dim // 4),
+            nnj.ReLU(True),
+            nnj.ConvTranspose2d(dim // 4, dim // 8, 4, 2, 1),
+            nnj.BatchNorm2d(dim // 8),
+            nnj.ReLU(True),
+            nnj.ConvTranspose2d(dim // 8, 3, 3, 1, 1),
+            nnj.Tanh(),
         )
         #self.apply(utils.weights_init)
 
-    def forward(self, z):
-        out = self.expand(z).view(z.size(0), -1, 4, 4)
-        return self.main(out)
+    def forward(self, z,jacob=False):
+
+        return self.main(z,jacob)
 
 class EBM_0GP(nn.Module):
     def __init__(self, args, device='cpu'):
@@ -98,7 +101,6 @@ class EBM_0GP(nn.Module):
         self.batch_size = args.batch_size
         self.save_dir = args.save_dir
         self.result_dir = args.result_dir
-        self.dataset = args.dataset
         self.log_dir = args.log_dir
         self.model_name = args.gan_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
@@ -154,16 +156,15 @@ class EBM_0GP(nn.Module):
                 fake= self.gen(z_train)
                 d_fake_g = self.disc(fake)
                 if args.train_mode == 'evals':
-                    H,mu=self.compute_entropy_s(z_train)
+                    H=self.compute_entropy_s(z_train)
                 elif args.train_mode == 'acc':
-                    H, mu = self.compute_entropy_acc(z_train)
+                    H = self.compute_entropy_acc(z_train)
                 g_loss = d_fake_g.mean()-H.mean()*args.H_weight
-                g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item(),\
-                                mu.mean().item()])
+                g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item()])
                 optimizer_g.zero_grad()
                 g_loss.backward()
                 optimizer_g.step()
-            d_fake_g_mean, g_loss_mean, H_mean, mu_mean\
+            d_fake_g_mean, g_loss_mean, H_mean\
                 = np.mean(g_costs[-args.generator_iters:], 0)
             sum_loss_g += g_loss_mean.item() * len(data)
 
@@ -178,6 +179,8 @@ class EBM_0GP(nn.Module):
             if iteration % (len(data_loader)) == 0:
                 with torch.no_grad():
                     self.visualize_results(epoch)
+            if iteration % (10*len(data_loader)) == 0:
+
             if (iteration) % (len(data_loader)) == 0:
                 avg_loss_d = sum_loss_d / len(data_loader) / args.batch_size
                 avg_loss_g = sum_loss_g / len(data_loader) / args.batch_size
@@ -188,100 +191,64 @@ class EBM_0GP(nn.Module):
             if (iteration+1) % (20*len(data_loader)) == 0:
                 self.save(epoch)
 
-    def compute_entropy_s(self, z):
-        self.gen.eval()
-        v = torch.randn(z.shape).to(self.device)
-        p = torch.randn(z.shape).to(self.device)
-        fake_eval=self.gen(z)
-        projection = torch.ones_like(fake_eval, requires_grad=True)
-        intermediate = torch.autograd.grad(fake_eval, z, projection, create_graph=True)
-        Jv = torch.autograd.grad(intermediate[0], projection, v, create_graph=True)[0]
-        #Jv=J.bmm(self.v.unsqueeze(-1)).squeeze()
-        mu=Jv.norm(2,dim=(1,2,3))/v.norm(2,dim=-1)
-        for i in range(2):
-            JTJv=(Jv.detach()*fake_eval).sum((1,2,3),True)
-            r=torch.autograd.grad(JTJv, z, torch.ones_like(JTJv, requires_grad=True), retain_graph=True)[0]\
-               -(mu**2).unsqueeze(-1)*v
-            #r = J.permute(0,2,1).bmm(Jv.unsqueeze(-1)).squeeze(-1)-mu.unsqueeze(-1)*self.v
-            #self.v.data.copy_(self.RaRitz(self.v,r,intermediate,projection).squeeze(-1))
-            v,p=self.RaRitz(v, r,p,intermediate, projection)
-            Jv = torch.autograd.grad(intermediate[0], projection, v.detach(), create_graph=True)[0]
-            #Jv = J.bmm(self.v.unsqueeze(-1)).squeeze()
-            mu = Jv.norm(2, dim=(1,2,3))
-        # if self.v.norm(2, dim=-1).min()==0:
-        #     print(iter)
-        #     print(self.v)
-        where_is_nan = torch.isnan(mu)
+    def RaRitz(self,v, r, p, intermediate, projection, device):
+        JV = []
+        r = r / (r.mean(-1, True))
+        if p.norm(2, 1).min() == 0:
+            p = torch.randn((p.shape[0], p.shape[-1]))
+        V = torch.stack((v, r, p), -1)
+        try:
+            V = torch.svd(V).U
+        except Exception as e:
+            print(e)
+            V = torch.randn(V.shape).to(device)
+            V = torch.svd(V).U
 
-        est = self.d  * torch.log(mu)
-        H = est.unsqueeze(-1)
-        self.gen.train()
-        return H,mu
-
-    #def compute_entropy_s(self, z,ds=1):
-
-    def compute_entropy_adam(self, z,ds=1):
-        self.gen.eval()
-        #fake2=self.gen(z)
-        #self.gen.disable_training()
-        #a=torch.randn((self.batch_size,self.d),requires_grad=True).cuda()
-        fake_eval=self.gen(z)
-        projection = torch.ones_like(fake_eval, requires_grad=True)
-        intermediate = torch.autograd.grad(fake_eval, z, projection, create_graph=True)
-        for i in range(2):
-            Jv = torch.autograd.grad(intermediate[0], projection, self.v_ada, create_graph=True)[0]
-            size = len(Jv.shape)
-            # Jv=J.bmm(self.v.unsqueeze(-1)).squeeze()
-            mu = Jv.norm(2, dim=list(range(1, size))) / self.v_ada.norm(2, dim=-1)
-            loss=mu.sum()
-            for name, param in self.gen.named_parameters():
-                param.requires_grad = False
-            loss.backward(retain_graph=True)
-            self.optimizer_ada.step()
-            for name, param in self.gen.named_parameters():
-                param.requires_grad = True
-        Jv = torch.autograd.grad(intermediate[0], projection, self.v_ada, create_graph=True)[0]
-        #Jv = J.bmm(self.v.unsqueeze(-1)).squeeze()
-        mu = Jv.norm(2, dim=list(range(1,size))) / (self.v_ada.norm(2, dim=-1))
-        est = (self.d / ds) * torch.log(mu)
-        H = est.unsqueeze(-1)
-        #s_gt=torch.svd(J).S[:, -1]
-        self.gen.train()
-        return H,mu
-
-    def RaRitz(self,v,r,p,intermediate, projection):
-        JV=[]
-        r=r/r.mean(-1,True)
-        # v=v/v.mean(-1,True)
-        # r=r-((v*r).sum(-1,True))/((v*v).sum(-1,True))*v
-        # v=v/v.norm(2,1,True)
-        # r=r/(r.norm(2,1,True))
-        if p.norm(2,1).min()==0:
-            p=torch.randn((self.batch_size, self.d))
-        V=torch.stack((v,r,p),-1)
-        #V=V.bmm(torch.svd(V).V)
-        #V=V/V.norm(2,1,True)
-        V =torch.svd(V).U
-        #V,_ = torch.qr(V)
-        #V=torch.stack((v,r),0)
         for i in range(V.shape[-1]):
-            Jv = torch.autograd.grad(intermediate, projection, V[:,:,i], retain_graph=True)[0]
+            Jv = torch.autograd.grad(intermediate, projection, V[:, :, i], retain_graph=True)[0]
             JV.append(Jv)
-        #JV=J.bmm(V)
-        if len(JV[0].shape)==4:
-            JV=torch.stack(JV,-1).flatten(1, 3)
+
+        if len(JV[0].shape) == 4:
+            JV = torch.stack(JV, -1).flatten(1, 3)
         else:
             JV = torch.stack(JV, -1)
-        #JV_gt=J.bmm(V)
-        #vjjv=JV.permute(0,2,1).bmm(JV)
-        v_min=torch.svd(JV).V[:, :,-1:]
-        p_op=V[:, :, -2:].bmm(v_min[:, -2:]).squeeze(-1)
-        p_op_norm=p_op.norm(2, dim=-1)
+        v_min = torch.svd(JV).V[:, :, -1:].cuda()
+        p_op = V[:, :, -2:].bmm(v_min[:, -2:]).squeeze(-1)
+        p_op_norm = p_op.norm(2, dim=-1)
         p.data.index_copy_(0, torch.where(~p_op_norm.isnan())[0], p_op[~p_op_norm.isnan()].detach())
-        v_op=V.bmm(v_min).squeeze(-1)
+        v_op = V.bmm(v_min).squeeze(-1)
         v_op_norm = v_op.norm(2, dim=-1)
         v.data.index_copy_(0, torch.where(~v_op_norm.isnan())[0], v_op[~v_op_norm.isnan()].detach())
-        return v,p
+        return v, p
+    def compute_entropy_s(self, z):
+        z.requires_grad_()
+        self.gen.eval()
+        fake_eval = self.gen(z)
+        projection = torch.ones_like(fake_eval, requires_grad=True).to(device)
+        intermediate = torch.autograd.grad(fake_eval, z, projection, create_graph=True)
+        v = torch.randn(z.shape).to(device)
+        p = torch.randn(z.shape).to(device)
+        Jv = torch.autograd.grad(intermediate[0], projection, v, retain_graph=True)[0]
+        size = len(Jv.shape)
+        # Jv=J.bmm(self.v.unsqueeze(-1)).squeeze()
+        mu = Jv.norm(2, dim=list(range(1, size))) / v.norm(2, dim=-1)
+        for i in range(args.ssv_iter):
+            JTJv = (Jv.detach() * fake_eval).sum(list(range(1, size)), True)
+            r = torch.autograd.grad(JTJv, z, torch.ones_like(JTJv, requires_grad=True), retain_graph=True)[0] \
+                - (mu ** 2).unsqueeze(-1) * v
+            v, p = self.RaRitz(v, r, p, intermediate[0], projection, device)
+            Jv = torch.autograd.grad(intermediate[0], projection, v.detach(), create_graph=True)[0]
+            mu = Jv.norm(2, dim=list(range(1, size)))
+        est = z.shape[-1]  * torch.log(mu)
+        H = est.mean()
+        return H
+    def compute_entropy_acc(self, z):
+        self.gen.eval()
+        _, J = self.gen(z, True)
+        jtj = torch.bmm(torch.transpose(J, -2, -1), J)
+        H = 0.5 * torch.slogdet(jtj)[1].unsqueeze(-1)
+        self.gen.train()
+        return H.mean()
     def visualize_results(self, epoch, fix=True):
         self.gen.eval()
         self.disc.eval()
@@ -291,17 +258,12 @@ class EBM_0GP(nn.Module):
             samples = self.gen(self.sample_z_)
         else:
             """ random noise """
-            sample_z_ = torch.randn((self.batch_size, self.z_dim))
-            if self.gpu_mode:
-                sample_z_ = sample_z_.cuda()
+            sample_z_ = torch.randn((self.batch_size, self.z_dim)).to(self.device)
 
             samples = self.gen(sample_z_)
 
-        if self.gpu_mode:
-            samples = samples.view(self.batch_size, 3, 32, 32)
-            # samples = samples.cpu().data.numpy().transpose(0, 2, 3, 1)
-        else:
-            samples = samples.view(self.batch_size, 3, 32, 32)
+
+        samples = samples.view(self.batch_size, 3, 32, 32)
             # samples = samples.data.numpy().transpose(0, 2, 3, 1)
 
         # samples = (samples + 1) / 2
@@ -309,9 +271,23 @@ class EBM_0GP(nn.Module):
         vutils.save_image(grid, self.result_dir +'/' + '_d_epoch%03d' % epoch + '.png')
         self.gen.train()
         self.disc.train()
+    def calculate_metric_score(self,dataloader):
+        self.disc.eval()
+        self.gen.eval()
+        fid_cache = '/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
+        n_generate = 10000
+        num_split, num_run4PR, num_cluster4PR, beta4PR = 1, 10, 20, 8
+        is_scores, fid_score = compute_is_and_fid(self.gen, self.d, args, device,
+                                                  fid_cache, n_generate=n_generate, splits=num_split)
+        precision, recall, f_beta, f_beta_inv = calculate_f_beta_score(dataloader, self.gen, self.d,
+                                                                       n_generate, num_run4PR, num_cluster4PR, beta4PR,
+                                                                       device)
+        PR_Curve = plot_pr_curve(precision, recall, self.result_dir)
 
-        # grid2 = torchvision.utils.make_grid(samples.data, scale_each=True, range=(0, 1), normalize=True)
-        # train_writer.add_image('generate', grid, epoch * 1875 + batch_idx)
+        print('IS', is_scores)
+        print('FID', fid_score)
+        print('F8', f_beta)
+        print('F1/8', f_beta_inv)
     def compute_ebmpr(self,dataloader):
         pkl_path_d = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/01/1624620823/epoch099_d.pkl'
         pkl_path_g = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/01/1624620823/epoch099_g.pkl'
@@ -333,11 +309,8 @@ class EBM_0GP(nn.Module):
         print('F8',f_beta)
         print('F1/8',f_beta_inv)
     def save(self, epoch):
-
         torch.save(self.disc.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_d.pkl'))
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_g.pkl'))
-        # with open(os.path.join(save_dir, self.model_name + '_history.pkl'), 'wb') as f:
-        #     pickle.dump(self.train_hist, f)
 
     def load(self):
         # save_dir = os.path.join(self.save_dir, self.dataset, self.model_name,'%03d'%self.d)
@@ -433,23 +406,6 @@ class EBM_0GP(nn.Module):
         plt.show()
         plt.close()
 
-    def compute_jacobian(self,outputs, inputs, create_graph=True):
-
-        jac = outputs.new_zeros(outputs.size() + inputs.size()[1:]).view((outputs.shape[0],-1,) + inputs.size()[1:])
-        for i in range(jac.shape[1]):
-            # print(out.requires_grad)
-            # print(inputs.requires_grad)
-            # input("IN various.calculate_jacobian()")
-
-            col_i = torch.autograd.grad(outputs.view(outputs.shape[0],-1)[:,i:i+1], inputs,
-                                        grad_outputs=torch.ones([outputs.shape[0],1], device=device),
-                                        retain_graph=True,create_graph=create_graph, allow_unused=True)[0]
-
-            jac[:,i,:] = col_i
-        if create_graph:
-            jac.requires_grad_()
-        return jac
-    #
 
 if __name__ == "__main__":
     """
@@ -469,7 +425,7 @@ if __name__ == "__main__":
         os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--gan_type', type=str, default='EBM',
+    parser.add_argument('--gan_type', type=str, default='EBM_0GP',
                         choices=['EBM_BB', 'EBM_0GP'], help='The type of EBM')
     parser.add_argument('--dataset', type=str, default='cifar10',
                         choices=['mnist', 'fashion-mnist', 'cifar10', 'cifar100', 'svhn'],
@@ -487,7 +443,10 @@ if __name__ == "__main__":
     parser.add_argument("--lrg", type=int, default=2e-4)
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
+    parser.add_argument("--ssv_iter", type=int, default=2)
     parser.add_argument("--gp_weight", type=float, default=0.001)
+    parser.add_argument('--train_mode', type=str, default='acc',
+                        choices=['evals', 'acc'], help='mode')
     parser.add_argument("--H_weight", type=int, default=1)
     parser.add_argument('--save_dir', type=str, default='models',
                         help='Directory name to save the model')
@@ -566,9 +525,9 @@ if __name__ == "__main__":
                                      transform=transform)
 
     train_loader = torch.utils.data.DataLoader(cifar10_train, batch_size=args.batch_size, shuffle=True, drop_last=True)
-    train_loader = dict(train=utils.InfiniteDataLoader(train_loader))
+    train_loader = dict(train=data.InfiniteDataLoader(train_loader))
     # Fit model
-    model = EBM_BB(args, device)
+    model = EBM_0GP(args, device)
     if args.mode == 'train':
         iters = args.epoch * len(train_loader['train'])
         model.trainer(train_loader['train'], iters)
