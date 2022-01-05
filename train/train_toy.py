@@ -15,6 +15,7 @@ import torchplot as plt
 import torch.distributions as td
 from stochman import nnj
 
+@utils.register_model(name='EBM_0GP')
 class EBM_0GP(nn.Module):
     def __init__(self, args, layers, device='cpu'):
         super(EBM_0GP, self).__init__()
@@ -27,7 +28,7 @@ class EBM_0GP(nn.Module):
         self.save_dir = args.save_dir
         self.result_dir = args.result_dir
         self.log_dir = args.log_dir
-        self.model_name = args.gan_type
+        self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
 
         self.disc = Disc()
@@ -161,29 +162,19 @@ class EBM_0GP(nn.Module):
         self.gen.eval()
         self.disc.eval()
 
-        if fix:
-            """ fixed noise """
-            samples = self.gen(self.sample_z_)
-        else:
-            """ random noise """
-            sample_z_ = torch.randn((points.shape[0], self.z_dim)).to(self.device)
-            samples = self.gen(sample_z_)
-        samples = samples.detach().cpu().numpy()
         points = points.detach().cpu().numpy()
         plt.clf()
-        ax = plt.subplot(1, 4, 1, aspect="equal", title='gen')
-        ax.scatter(samples[:, 0], samples[:, 1], s=1)
 
-        ax = plt.subplot(1, 4, 2, aspect="equal", title='data')
+        ax = plt.subplot(1, 3, 1, aspect="equal", title='data')
         ax.scatter(points[:, 0], points[:, 1], s=1)
         self.disc.cpu()
 
-        ax = plt.subplot(1, 4, 3, aspect="equal")
+        ax = plt.subplot(1, 3, 2, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              title="p(x)")
 
-        ax = plt.subplot(1, 4, 4, aspect="equal")
+        ax = plt.subplot(1, 3, 3, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              exp=False, title="log p(x)")
@@ -218,80 +209,25 @@ class EBM_0GP(nn.Module):
         self.gen.eval()
         points = data_process(args.dataset, args.batch_size)
         points = points.to(self.device)
-        samples = self.gen(self.sample_z_)
-
-        samples = samples.detach().cpu().numpy()
         points = points.detach().cpu().numpy()
         plt.clf()
-        ax = plt.subplot(1, 4, 1, aspect="equal", title='gen')
-        ax.scatter(samples[:, 0], samples[:, 1], s=1)
 
-        ax = plt.subplot(1, 4, 2, aspect="equal", title='data')
+        ax = plt.subplot(1, 3, 1, aspect="equal", title='data')
         ax.scatter(points[:, 0], points[:, 1], s=1)
         self.disc.cpu()
 
-        ax = plt.subplot(1, 4, 3, aspect="equal")
+        ax = plt.subplot(1, 3, 2, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              title="p(x)")
 
-        ax = plt.subplot(1, 4, 4, aspect="equal")
+        ax = plt.subplot(1, 3, 3, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              exp=False, title="log p(x)")
 
         plt.show()
         plt.close()
-
-
-    def plot_pr(self):
-
-        pkl_path_d = '/home/cong/code/geoml_gan/models/25gaussians/EBM_0gp/01/1621676285/epoch319_d.pkl'
-        pkl_path_g = '/home/cong/code/geoml_gan/models/25gaussians/EBM_0gp/01/1621676285/epoch319_g.pkl'
-        self.disc.load_state_dict(torch.load(pkl_path_d))
-        self.gen.load_state_dict(torch.load(pkl_path_g))
-        self.disc.eval()
-        self.gen.eval()
-        sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
-        points = data_process(args.dataset, args.batch_size)
-        points = points.to(self.device)
-        samples = self.gen(sample_z_)
-
-        samples = samples.detach().cpu().numpy()
-        points = points.detach().cpu().numpy()
-        plt.clf()
-        fig = plt.figure(figsize=(2, 2))
-        plt.scatter(samples[:, 0], samples[:, 1], s=1)
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/gene_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-        fig = plt.figure(figsize=(2, 2))
-        plt.scatter(points[:, 0], points[:, 1], s=1)
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/real_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-
-        fig = plt.figure(figsize=(2, 2))
-        npts = 100
-        side = np.linspace(-4, 4, npts)
-        side2 = np.linspace(-4, 4, npts)
-
-        x = np.asarray(np.meshgrid(side, side2)).transpose(1, 2, 0).reshape((-1, 2))
-        x = torch.from_numpy(x).type(torch.float32).to(device)
-        logpx = -self.disc(x).squeeze()
-
-        logpx = logpx
-        logpx = logpx - logpx.logsumexp(0)
-        px = np.exp(logpx.cpu().detach().numpy()).reshape(npts, npts)
-        px = px / px.sum()
-        plt.imshow(px, origin='lower', aspect="auto")
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/pr_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-
 
 class Disc(nn.Module):
     def __init__(self, input_dim=2, dim=100):
@@ -331,7 +267,7 @@ class gen(nn.Module):
     def forward(self,z,jacob=False):
         out = self.main(z,jacob)
         return out
-
+@utils.register_model(name='EBM_BB')
 class EBM_BB(nn.Module):
     def __init__(self, args, layers, device='cpu'):
         super(EBM_BB, self).__init__()
@@ -344,7 +280,7 @@ class EBM_BB(nn.Module):
         self.save_dir = args.save_dir
         self.result_dir = args.result_dir
         self.log_dir = args.log_dir
-        self.model_name = args.gan_type
+        self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d))
         self.sample_z_ = self.sample_z_.to(self.device)
 
@@ -514,32 +450,19 @@ class EBM_BB(nn.Module):
         self.gen.eval()
         self.disc.eval()
 
-        if fix:
-            """ fixed noise """
-            samples = self.gen(self.sample_z_)
-        else:
-            """ random noise """
-            sample_z_ = torch.randn((points.shape[0], self.z_dim))
-            if self.gpu_mode:
-                sample_z_ = sample_z_.cuda()
-
-            samples = self.gen(sample_z_)
-        samples = samples.detach().cpu().numpy()
         points = points.detach().cpu().numpy()
         plt.clf()
-        ax = plt.subplot(1, 4, 1, aspect="equal", title='gen')
-        ax.scatter(samples[:, 0], samples[:, 1], s=1)
 
-        ax = plt.subplot(1, 4, 2, aspect="equal", title='data')
+        ax = plt.subplot(1, 3, 1, aspect="equal", title='data')
         ax.scatter(points[:, 0], points[:, 1], s=1)
         self.disc.cpu()
 
-        ax = plt.subplot(1, 4, 3, aspect="equal")
+        ax = plt.subplot(1, 3, 2, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              title="p(x)")
 
-        ax = plt.subplot(1, 4, 4, aspect="equal")
+        ax = plt.subplot(1, 3, 3, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              exp=False, title="log p(x)")
@@ -567,32 +490,26 @@ class EBM_BB(nn.Module):
 
     def compute_ebmpr(self):
 
-        pkl_path_d = '/home/congen/code/EBM-BB/models/25gaussians/EBM_BB/01/1639839968/epoch149999_d.pkl'
-        pkl_path_g = '/home/congen/code/EBM-BB/models/25gaussians/EBM_BB/01/1639839968/epoch149999_g.pkl'
+        pkl_path_d = '/home/congen/code/EBM-BB/models/swiss_roll/EBM_BB/01/1639848355/epoch119999_d.pkl'
+        pkl_path_g = '/home/congen/code/EBM-BB/models/swiss_roll/EBM_BB/01/1639848355/epoch119999_g.pkl'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
         self.disc.eval()
         self.gen.eval()
         points = data_process(args.dataset, args.batch_size)
         points = points.to(self.device)
-        sample_z = torch.randn((200, self.d)).to(self.device)
-        samples = self.gen(sample_z)
-
-        samples = samples.detach().cpu().numpy()
         points = points.detach().cpu().numpy()
         plt.clf()
-        ax = plt.subplot(1, 4, 1, aspect="equal", title='gen')
-        ax.scatter(samples[:, 0], samples[:, 1], s=1)
-        ax = plt.subplot(1, 4, 2, aspect="equal", title='data')
+        ax = plt.subplot(1, 3, 1, aspect="equal", title='data')
         ax.scatter(points[:, 0], points[:, 1], s=1)
 
         self.disc.cpu()
-        ax = plt.subplot(1, 4, 3, aspect="equal")
+        ax = plt.subplot(1, 3, 2, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              title="p(x)")
 
-        ax = plt.subplot(1, 4, 4, aspect="equal")
+        ax = plt.subplot(1, 3, 3, aspect="equal")
         self.plt_toy_density(lambda x: -self.disc.main(x), ax,
                              low=-4, high=4,
                              exp=False, title="log p(x)")
@@ -600,59 +517,6 @@ class EBM_BB(nn.Module):
         plt.show()
         plt.close()
 
-
-    def plot_pr(self):
-
-        pkl_path_d = '/home/cong/code/geoml_gan/models/swiss_roll/EBM_upper_gp/01/1620981536/epoch199999_d.pkl'
-        pkl_path_g = '/home/cong/code/geoml_gan/models/swiss_roll/EBM_upper_gp/01/1620981536/epoch199999_g.pkl'
-        self.disc.load_state_dict(torch.load(pkl_path_d))
-        self.gen.load_state_dict(torch.load(pkl_path_g))
-        self.disc.eval()
-        self.gen.eval()
-        sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
-        points = data_process(args.dataset, args.batch_size)
-        points = points.to(self.device)
-        samples = self.gen(sample_z_)
-
-        samples = samples.detach().cpu().numpy()
-        points = points.detach().cpu().numpy()
-        plt.clf()
-        fig = plt.figure(figsize=(2, 2))
-        plt.scatter(samples[:, 0], samples[:, 1], s=1)
-        plt.xlim((-4, 4))
-        plt.ylim((-4, 4))
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/gene_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-
-        fig = plt.figure(figsize=(2, 2))
-        plt.scatter(points[:, 0], points[:, 1], s=1)
-        plt.xlim((-4, 4))
-        plt.ylim((-4, 4))
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/real_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-
-        fig = plt.figure(figsize=(2, 2))
-        npts = 100
-        side = np.linspace(-4, 4, npts)
-        side2 = np.linspace(-4, 4, npts)
-        x = np.asarray(np.meshgrid(side, side2)).transpose(1, 2, 0).reshape((-1, 2))
-        x = torch.from_numpy(x).type(torch.float32).to(device)
-        logpx = -self.disc.main(x).squeeze()
-        logpx = logpx
-        logpx = logpx - logpx.logsumexp(0)
-        px = np.exp(logpx.cpu().detach().numpy()).reshape(npts, npts)
-        px = px / px.sum()
-        plt.imshow(px, origin='lower', aspect="auto")
-        plt.xticks([])
-        plt.yticks([])
-        fig.savefig("%s/pr_%s.png" % (self.result_dir, args.dataset), bbox_inches='tight', pad_inches=0.03)
-        plt.close()
-
-        # self.log_figure(fig=fig2, dir=results_dir, saved_file='Dx')
 
 if __name__ == "__main__":
     """
@@ -669,17 +533,17 @@ if __name__ == "__main__":
     :return:
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '6'
     os.environ['CUDA_HOME'] = '/opt/cuda/cuda-10.2'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--gan_type', type=str, default='EBM_0GP',
+    parser.add_argument('--EBM_type', type=str, default='EBM_BB',
                         choices=['EBM_BB','EBM_0GP'],
                         help='The type of EBM')
     parser.add_argument('--dataset', type=str, default='swiss_roll',
                         choices=['swiss_roll',  'two_moon', '25gaussians'],
                         help='The name of dataset')
-    parser.add_argument('--mode', type=str, default='train',
+    parser.add_argument('--mode', type=str, default='ebmpr',
                         choices=['train',  'ebmpr'], help='mode')
     parser.add_argument('--iters', type=int, default=150001, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=200, help='The size of batch')
@@ -762,15 +626,13 @@ if __name__ == "__main__":
     layers = [2, 100, 100, 2]
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
-    model = EBM_0GP(args, layers, device)
+    model= utils.get_model(args.EBM_type)(args, layers, device)
 
     if args.mode == 'train':
         model.trainer(args.iters)
 
     elif args.mode == 'ebmpr':
         model.compute_ebmpr()
-    elif args.mode == 'plot_pr':
-        model.plot_pr()
 
 
 
