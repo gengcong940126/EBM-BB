@@ -18,77 +18,6 @@ import torch.distributions as td
 
 
 
-class EnergyModel(nn.Module):
-    def __init__(self, dim=512):
-        super().__init__()
-        if args.sn==True:
-            self.main = nn.Sequential(
-                nn.utils.spectral_norm(nn.Conv2d(3, dim // 8, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 8, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 4, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 4, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 2, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim // 2, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
-            self.expand = nn.utils.spectral_norm(nn.Linear(4 * 4 * dim, 1))
-
-        else:
-            self.main = nn.Sequential(
-                nn.Conv2d(3, dim // 8, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 8, dim // 8, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 8, dim // 4, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 4, dim // 4, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 4, dim // 2, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 2, dim // 2, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 2, dim, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-            )
-            self.expand = nn.Linear(4 * 4 * dim, 1)
-        self.l = nn.Linear(1, 1, bias=False)
-    def forward(self, x):
-        out = self.main(x).view(x.size(0), -1)
-        out = self.l(self.expand(out)).squeeze(-1)
-        return out
-
-class Generator(nn.Module):
-    def __init__(self, z_dim=128, dim=512):
-        super().__init__()
-
-        self.main = nnj.Sequential(
-            nnj.Linear(z_dim, 4 * 4 * dim),
-            nnj.Reshape(-1,4,4),
-            nnj.ConvTranspose2d(dim, dim // 2, 4, 2, 1),
-            nnj.BatchNorm2d(dim // 2),
-            nnj.ReLU(True),
-            nnj.ConvTranspose2d(dim // 2, dim // 4, 4, 2, 1),
-            nnj.BatchNorm2d(dim // 4),
-            nnj.ReLU(True),
-            nnj.ConvTranspose2d(dim // 4, dim // 8, 4, 2, 1),
-            nnj.BatchNorm2d(dim // 8),
-            nnj.ReLU(True),
-            nnj.ConvTranspose2d(dim // 8, 3, 3, 1, 1),
-            nnj.Tanh(),
-        )
-        #self.apply(utils.weights_init)
-
-    def forward(self, z,jacob=False):
-
-        return self.main(z,jacob)
-
 @utils.register_model(name='EBM_0GP')
 class EBM_0GP(nn.Module):
     def __init__(self, args, device='cpu'):
@@ -101,8 +30,14 @@ class EBM_0GP(nn.Module):
         self.log_dir = args.log_dir
         self.model_name = args.gan_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
-        self.disc = EnergyModel()
-        self.gen = Generator(self.d)
+        if args.input_size==32:
+            module = __import__('model.DCGAN')
+            self.disc = module.EnergyModel(args)
+            self.gen = module.Generator(self.d)
+        elif args.input_size==64:
+            module = __import__('model.Resnet')
+            self.disc = module.EnergyModel(args)
+            self.gen = module.Generator(args,self.d)
         self.to(self.device)
 
         if args.ngpu > 1:
@@ -173,7 +108,7 @@ class EBM_0GP(nn.Module):
                 self.writer.add_scalar('g_loss', g_loss_mean, iteration)
                 self.writer.add_scalar('gp_loss', gp_loss_mean, iteration)
                 self.writer.add_scalar('H', H_mean, iteration)
-            if iteration % (len(data_loader)) == 0:
+            if iteration % (5*len(data_loader)) == 0:
                 with torch.no_grad():
                     self.visualize_results(epoch)
             if iteration % (10*len(data_loader)) == 0:
@@ -277,11 +212,10 @@ class EBM_0GP(nn.Module):
         self.gen.load_state_dict(torch.load(pkl_path_g))
         self.disc.eval()
         self.gen.eval()
-        fid_cache='/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
-        n_generate = 10000
+        n_generate = len(dataloader.dataset)
         num_split, num_run4PR, num_cluster4PR, beta4PR = 1, 10, 20, 8
-        is_scores, fid_score=compute_is_and_fid(self.gen, self.d, args, device,
-                                                fid_cache, n_generate=n_generate,splits=num_split)
+        is_scores, fid_score=compute_is_and_fid(dataloader,self.gen, self.d, args, device,
+                                             n_generate=n_generate,splits=num_split)
         precision, recall, f_beta, f_beta_inv = calculate_f_beta_score(dataloader, self.gen, self.d,
                                 n_generate,num_run4PR, num_cluster4PR, beta4PR,device)
         PR_Curve = plot_pr_curve(precision, recall,self.result_dir)
@@ -293,11 +227,10 @@ class EBM_0GP(nn.Module):
     def eval_metric_score(self,iteration,dataloader):
         self.disc.eval()
         self.gen.eval()
-        fid_cache = '/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
-        n_generate = 10000
+        n_generate = len(dataloader.dataset)
         num_split, num_run4PR, num_cluster4PR, beta4PR = 1, 10, 20, 8
-        is_scores, fid_score = compute_is_and_fid(self.gen, self.d, args, device,
-                                                  fid_cache, n_generate=n_generate, splits=num_split)
+        is_scores, fid_score = compute_is_and_fid(dataloader,self.gen, self.d, args, device,
+                                               n_generate=n_generate, splits=num_split)
         precision, recall, f_beta, f_beta_inv = calculate_f_beta_score(dataloader, self.gen, self.d,
                                                                        n_generate, num_run4PR, num_cluster4PR, beta4PR,
                                                                        device)
@@ -331,8 +264,14 @@ class EBM_BB(nn.Module):
         self.log_dir = args.log_dir
         self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
-        self.disc = EnergyModel()
-        self.gen = Generator(self.d)
+        if args.input_size == 32:
+            module = __import__('model.DCGAN', fromlist=['something'])
+            self.disc = module.EnergyModel(args)
+            self.gen = module.Generator(self.d)
+        elif args.input_size == 64:
+            module = __import__('model.Resnet', fromlist=['something'])
+            self.disc = module.EnergyModel(args)
+            self.gen = module.Generator(args, self.d)
         self.to(self.device)
 
         if args.ngpu > 1:
@@ -340,6 +279,7 @@ class EBM_BB(nn.Module):
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
     def trainer(self, data_loader, test_loader, iters=50):
+        self.load()
         optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, 0.9), lr=args.lrd)
         optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, 0.9), lr=args.lrg)
         sum_loss_d = 0
@@ -364,10 +304,7 @@ class EBM_BB(nn.Module):
                             inputs=G_z_detach, grad_outputs=torch.ones_like(d_fake),
                                     allow_unused=True, create_graph=True)[0]
                 gradients = gradients.flatten(start_dim=1)
-                if args.train_mode == 'eval':
-                    gp, Jv, H= self.compute_gp(z_train)
-                elif args.train_mode == 'acc':
-                    gp, Jv, H= self.compute_gp_acc(z_train)
+                gp, Jv, H= self.compute_gp(z_train)
                 gp_loss = (((gradients * Jv.detach()).sum(-1) - gp.detach()) ** 2).mean() * 0.5
                 if args.ada == True:
                     gp_weight = 0.7 * (2307 + iteration) ** (-0.55)
@@ -404,7 +341,7 @@ class EBM_BB(nn.Module):
                 self.writer.add_scalar('g_loss', g_loss_mean, iteration)
                 self.writer.add_scalar('gp_loss', gp_loss_mean, iteration)
                 self.writer.add_scalar('H', H_mean, iteration)
-            if iteration % (len(data_loader)) == 0:
+            if iteration % (5*len(data_loader)) == 0:
                 with torch.no_grad():
                     self.visualize_results(epoch)
             if iteration % (10*len(data_loader)) == 0:
@@ -440,7 +377,10 @@ class EBM_BB(nn.Module):
             JV = torch.stack(JV, -1).flatten(1, 3)
         else:
             JV = torch.stack(JV, -1)
-        v_min = torch.svd(JV).V[:, :, -1:].cuda()
+        try:
+            v_min = torch.svd(JV).V[:, :, -1:].to(device)
+        except:  # torch.svd may have convergence issues for GPU and CPU.
+            v_min = torch.svd(JV+ 1e-4 * JV.mean() * torch.rand(JV.shape).to(device)).V[:, :, -1:].to(device)
         p_op = V[:, :, -2:].bmm(v_min[:, -2:]).squeeze(-1)
         p_op_norm = p_op.norm(2, dim=-1)
         p.data.index_copy_(0, torch.where(~p_op_norm.isnan())[0], p_op[~p_op_norm.isnan()].detach())
@@ -463,8 +403,9 @@ class EBM_BB(nn.Module):
         Jv = torch.autograd.grad(intermediate[0], projection, v, retain_graph=True)[0]
         size = len(Jv.shape)
         # Jv=J.bmm(self.v.unsqueeze(-1)).squeeze()
-        mu = Jv.norm(2, dim=list(range(1, size))) / v.norm(2, dim=-1)
-        for i in range(2):
+        mu0 = Jv.norm(2, dim=list(range(1, size))) / v.norm(2, dim=-1)
+        mu=mu0.clone()
+        for i in range(args.ssv_iter):
             JTJv = (Jv.detach() * fake_eval).sum(list(range(1, size)), True)
             r = torch.autograd.grad(JTJv, z, torch.ones_like(JTJv, requires_grad=True), retain_graph=True)[0] \
                 - (mu ** 2).unsqueeze(-1) * v
@@ -473,7 +414,10 @@ class EBM_BB(nn.Module):
             # self.v.data.copy_(v_op)
             Jv = torch.autograd.grad(intermediate[0], projection, v.detach(), create_graph=True)[0]
             mu = Jv.norm(2, dim=list(range(1, size))) / (v.norm(2, dim=-1))
-        est = z.shape[-1] * torch.log(mu)
+        try:
+            est = z.shape[-1] * torch.log(mu)
+        except:
+            est = z.shape[-1] * torch.log(mu0)
         logpGz = logpz - est
         deri = torch.autograd.grad(-logpGz, z, torch.ones_like(logpGz, requires_grad=True), retain_graph=True)[0]
         # gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
@@ -558,11 +502,10 @@ class EBM_BB(nn.Module):
         self.gen.load_state_dict(torch.load(pkl_path_g))
         self.disc.eval()
         self.gen.eval()
-        fid_cache='/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
-        n_generate = 10000
+        n_generate = len(dataloader.dataset)
         num_split, num_run4PR, num_cluster4PR, beta4PR = 1, 10, 20, 8
-        is_scores, fid_score=compute_is_and_fid(self.gen, self.d, args, device,
-                                                fid_cache, n_generate=n_generate,splits=num_split)
+        is_scores, fid_score=compute_is_and_fid(dataloader,self.gen, self.d, args, device,
+                                                 n_generate=n_generate,splits=num_split)
         precision, recall, f_beta, f_beta_inv = calculate_f_beta_score(dataloader, self.gen, self.d,
                                 n_generate,num_run4PR, num_cluster4PR, beta4PR,device)
         PR_Curve = plot_pr_curve(precision, recall,self.result_dir)
@@ -574,11 +517,11 @@ class EBM_BB(nn.Module):
     def eval_metric_score(self,iteration,dataloader):
         self.disc.eval()
         self.gen.eval()
-        fid_cache = '/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
-        n_generate = 10000
+        #fid_cache = '/home/congen/code/AGE/data/tf_fid_stats_cifar10_32.npz'
+        n_generate = len(dataloader.dataset)
         num_split, num_run4PR, num_cluster4PR, beta4PR = 1, 10, 20, 8
-        is_scores, fid_score = compute_is_and_fid(self.gen, self.d, args, device,
-                                                  fid_cache, n_generate=n_generate, splits=num_split)
+        is_scores, fid_score = compute_is_and_fid(dataloader,self.gen, self.d, args, device,
+                                                   n_generate=n_generate, splits=num_split)
         precision, recall, f_beta, f_beta_inv = calculate_f_beta_score(dataloader, self.gen, self.d,
                                                                        n_generate, num_run4PR, num_cluster4PR, beta4PR,
                                                                        device)
@@ -595,8 +538,8 @@ class EBM_BB(nn.Module):
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_g.pkl'))
 
     def load(self):
-        pkl_path_d = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/1617651553/epoch029_d.pkl'
-        pkl_path_g = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/1617651553/epoch029_g.pkl'
+        pkl_path_d = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641558437/epoch003_d.pkl'
+        pkl_path_g = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641558437/epoch003_g.pkl'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
 
@@ -606,18 +549,18 @@ if __name__ == "__main__":
     """
     Usage:
 
-        export CUDA_VISIBLE_DEVICES=2
-        export PORT=6007
-        export CUDA_HOME=/opt/cuda/cuda-10.2
+        export CUDA_VISIBLE_DEVICES=1
+        export PORT=6006
+        export CUDA_HOME=/opt/cuda/cuda-11.0
         export TIME_STR=1
-        export PYTHONPATH=./:./examples
-        python 	./examples/cifar_gan.py
+        export PYTHONPATH=./
+        python 	./train/train_image.py
 
 
     :return:
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--EBM_type', type=str, default='EBM_BB',
@@ -628,7 +571,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'],help='mode')
     parser.add_argument("--seed", type=int, default=23)
-    parser.add_argument("--bn", type=bool, default=True)
+    parser.add_argument("--bn", type=bool, default=False)
     parser.add_argument("--sn", type=bool, default=True)
     parser.add_argument('--epoch', type=int, default=100, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
@@ -642,8 +585,6 @@ if __name__ == "__main__":
     parser.add_argument("--generator_iters", type=int, default=1)
     parser.add_argument("--ssv_iter", type=int, default=2)
     parser.add_argument("--gp_weight", type=float, default=0.001)
-    parser.add_argument('--train_mode', type=str, default='acc',
-                        choices=['eval', 'acc'], help='mode')
     parser.add_argument("--H_weight", type=int, default=1)
     parser.add_argument('--save_dir', type=str, default='models',
                         help='Directory name to save the model')
@@ -658,19 +599,19 @@ if __name__ == "__main__":
     if args.mode == 'train' and utils.is_debugging() == False:
         time = int(time.time())
         args.save_dir = os.path.join(args.save_dir + '/' + args.dataset + '/'
-                + args.gan_type + '/%03d' % args.z_dim +'/%02d' % args.energy_model_iters+ '/%03d' % time)
+                + args.EBM_type + '/%03d' % args.z_dim +'/%02d' % args.energy_model_iters+ '/%03d' % time)
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
 
         # --result_dir
         args.result_dir = os.path.join(args.result_dir + '/' + args.dataset + '/'
-            + args.gan_type + '/%03d' % args.z_dim +'/%02d' % args.energy_model_iters+ '/%03d' % time)
+            + args.EBM_type + '/%03d' % args.z_dim +'/%02d' % args.energy_model_iters+ '/%03d' % time)
         if not os.path.exists(args.result_dir):
             os.makedirs(args.result_dir)
 
         # --log_dir
         args.log_dir = os.path.join(args.log_dir + '/' + args.dataset + '/'
-                + args.gan_type + '/%03d' % args.z_dim + '/%02d' % args.energy_model_iters+'/tb_%03d' % time)
+                + args.EBM_type + '/%03d' % args.z_dim + '/%02d' % args.energy_model_iters+'/tb_%03d' % time)
         if not os.path.exists(args.log_dir):
             os.makedirs(args.log_dir)
 
@@ -708,29 +649,15 @@ if __name__ == "__main__":
         print('batch size must be larger than or equal to one')
     utils.setup_seed(args.seed)
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
-    ## Data
-    transform = transforms.Compose([transforms.Resize((args.input_size, args.input_size)),
-                                    transforms.RandomHorizontalFlip(),
-                                    transforms.ToTensor(),
-                                    transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-    test_transform = transforms.Compose(
-        [transforms.Resize((args.input_size, args.input_size)),
-         transforms.ToTensor(),
-         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-    if args.dataset=='cifar10':
-        cifar10_train = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=True, download=True,
-                                     transform=transform)
-        cifar10_test = datasets.CIFAR10('/home/congen/code/geoml_gan/data/cifar10', train=False, download=True,
-                                        transform=test_transform)
-
-    train_loader = torch.utils.data.DataLoader(cifar10_train, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    dataset_train = data.LoadDataset(args,train=True)
+    dataset_test = data.LoadDataset(args,train=False)
+    train_loader = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True, drop_last=True)
     train_loader = dict(train=data.InfiniteDataLoader(train_loader))
-    test_loader = torch.utils.data.DataLoader(cifar10_test, batch_size=args.batch_size, shuffle=False, drop_last=False)
+    test_loader = torch.utils.data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=False, drop_last=False)
     # Fit model
     model= utils.get_model(args.EBM_type)(args, device)
     if args.mode == 'train':
-        iters = args.epoch * len(train_loader['train'])
+        iters = args.epoch * len(train_loader['train'])+1
         model.trainer(train_loader['train'],test_loader, iters)
     elif args.mode == 'ebmpr':
         model.compute_ebmpr(test_loader)

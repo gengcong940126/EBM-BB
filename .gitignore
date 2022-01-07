@@ -137,3 +137,4 @@ dmypy.json
 .idea/.gitignore
 .idea/sshConfigs.xml
 .idea/webServers.xml
+.idea/remote-mappings.xml

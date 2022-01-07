@@ -63,16 +63,21 @@ def get_inception_and_fid_score(images, device, fid_cache, is_splits=10,
 
     return is_score, fid_score
 
-def compute_is_and_fid(gen, d, args, device, fid_cache, n_generate,splits):
+def compute_is_and_fid(dataloader,gen, d, args, device, n_generate,splits):
+    dataset_iter = iter(dataloader)
     total_instance = n_generate
     n_batches = math.ceil(float(total_instance) / float(args.batch_size))
     ys = []
+    ys_real=[]
     pred_arr = np.empty((total_instance, 2048))
+    pred_arr_real = np.empty((total_instance, 2048))
     # block_idx1 = InceptionV3.BLOCK_INDEX_BY_DIM[2048]
     # block_idx2 = InceptionV3.BLOCK_INDEX_BY_DIM['prob']
     inception_model = InceptionV3().to(device)
     inception_model.eval()
     for i in tqdm(range(0, n_batches)):
+        real_images, real_labels = next(dataset_iter)
+        real_images, real_labels = real_images.to(device), real_labels.to(device)
         start = i * args.batch_size
         end = start + args.batch_size
         z_train = torch.randn((args.batch_size, d)).cuda()
@@ -82,16 +87,22 @@ def compute_is_and_fid(gen, d, args, device, fid_cache, n_generate,splits):
         with torch.no_grad():
             embeddings, logits = inception_model(batch_images)
             y = torch.nn.functional.softmax(logits, dim=1)
+            embeddings_real, logits_real = inception_model(real_images)
+            y_real = torch.nn.functional.softmax(logits_real, dim=1)
         ys.append(y)
+        ys_real.append(y_real)
 
         if total_instance >= args.batch_size:
             pred_arr[start:end] = embeddings.cpu().data.numpy().reshape(args.batch_size, -1)
+            pred_arr_real[start:end] = embeddings_real.cpu().data.numpy().reshape(args.batch_size, -1)
         else:
             pred_arr[start:] = embeddings[:total_instance].cpu().data.numpy().reshape(total_instance, -1)
+            pred_arr_real[start:] = embeddings_real[:total_instance].cpu().data.numpy().reshape(total_instance, -1)
 
         total_instance -= batch_images.shape[0]
     with torch.no_grad():
         ys = torch.cat(ys, 0)
+        ys_real = torch.cat(ys_real, 0)
     is_scores, is_std = kl_scores(ys[:n_generate], splits=splits)
     m1 = np.mean(pred_arr, axis=0)
     s1 = np.cov(pred_arr, rowvar=False)
@@ -113,10 +124,7 @@ def compute_is_and_fid(gen, d, args, device, fid_cache, n_generate,splits):
     #     else:
     #         pred_arr[start:] = embeddings[:total_instance].cpu().data.numpy().reshape(total_instance, -1)
     #     total_instance -= images.shape[0]
-    #m2 = np.mean(pred_arr, axis=0)
-    #s2 = np.cov(pred_arr, rowvar=False)
-    f = np.load(fid_cache)
-    m2, s2 = f['mu'][:], f['sigma'][:]
-    f.close()
+    m2 = np.mean(pred_arr_real, axis=0)
+    s2 = np.cov(pred_arr_real, rowvar=False)
     fid_score = calculate_frechet_distance(m1, s1, m2, s2)
     return is_scores,fid_score

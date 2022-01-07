@@ -537,13 +537,13 @@ if __name__ == "__main__":
     os.environ['CUDA_HOME'] = '/opt/cuda/cuda-10.2'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--EBM_type', type=str, default='EBM_BB',
+    parser.add_argument('--EBM_type', type=str, default='EBM_0GP',
                         choices=['EBM_BB','EBM_0GP'],
                         help='The type of EBM')
     parser.add_argument('--dataset', type=str, default='swiss_roll',
                         choices=['swiss_roll',  'two_moon', '25gaussians'],
                         help='The name of dataset')
-    parser.add_argument('--mode', type=str, default='ebmpr',
+    parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'], help='mode')
     parser.add_argument('--iters', type=int, default=150001, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=200, help='The size of batch')

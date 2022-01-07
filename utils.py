@@ -1,7 +1,8 @@
 import torch
 import random
 import numpy as np
-
+import torch.nn as nn
+from torch.nn import init
 _MODELS = {}
 
 
@@ -31,6 +32,37 @@ def weights_init(m):
     elif classname.find("BatchNorm") != -1:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
+
+def init_weights(modules, initialize):
+    for module in modules():
+        if (isinstance(module, nn.Conv2d)
+                or isinstance(module, nn.ConvTranspose2d)
+                or isinstance(module, nn.Linear)):
+            if initialize == 'ortho':
+                init.orthogonal_(module.weight)
+                if module.bias is not None:
+                    module.bias.data.fill_(0.)
+            elif initialize == 'N02':
+                init.normal_(module.weight, 0, 0.02)
+                if module.bias is not None:
+                    module.bias.data.fill_(0.)
+            elif initialize in ['glorot', 'xavier']:
+                init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    module.bias.data.fill_(0.)
+            else:
+                print('Init style not recognized...')
+        elif isinstance(module, nn.Embedding):
+            if initialize == 'ortho':
+                init.orthogonal_(module.weight)
+            elif initialize == 'N02':
+                init.normal_(module.weight, 0, 0.02)
+            elif initialize in ['glorot', 'xavier']:
+                init.xavier_uniform_(module.weight)
+            else:
+                print('Init style not recognized...')
+        else:
+            pass
 
 def register_model(cls=None, *, name=None):
   """A decorator for registering model classes."""
