@@ -65,7 +65,7 @@ def init_weights(modules, initialize):
             pass
 
 def register_model(cls=None, *, name=None):
-  """A decorator for registering model classes."""
+  """A decorator for registering network classes."""
 
   def _register(cls):
     if name is None:
@@ -73,7 +73,7 @@ def register_model(cls=None, *, name=None):
     else:
       local_name = name
     if local_name in _MODELS:
-      raise ValueError(f'Already registered model with name: {local_name}')
+      raise ValueError(f'Already registered network with name: {local_name}')
     _MODELS[local_name] = cls
     return cls
 

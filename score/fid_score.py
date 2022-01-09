@@ -15,8 +15,8 @@ def get_statistics(images, model, device, batch_size=50, verbose=False):
 
     Params:
     -- images      : List of image
-    -- model       : Instance of inception model
-    -- batch_size  : Batch size of images for the model to process at once.
+    -- network       : Instance of inception network
+    -- batch_size  : Batch size of images for the network to process at once.
                      Make sure that the number of samples is a multiple of
                      the batch size, otherwise some samples are ignored. This
                      behavior is retained to match the original FID score
@@ -51,7 +51,7 @@ def get_statistics(images, model, device, batch_size=50, verbose=False):
         with torch.no_grad():
             pred = model(batch_images)[0]
 
-        # If model output is not scalar, apply global spatial average pooling.
+        # If network output is not scalar, apply global spatial average pooling.
         # This happens if you choose a dimensionality not equal DIM.
         if len(pred.shape) != 2 and (pred.size(2) != 1 or pred.size(3) != 1):
             pred = adaptive_avg_pool2d(pred, output_size=(1, 1))

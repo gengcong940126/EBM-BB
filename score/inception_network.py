@@ -29,14 +29,14 @@ class InceptionV3(nn.Module):
         ----------
         resize_input : bool
             If true, bilinearly resizes input to width and height 299 before
-            feeding input to model. As the network without fully connected
+            feeding input to network. As the network without fully connected
             layers is fully convolutional, it should be able to handle inputs
             of arbitrary size, so resizing might not be strictly needed
         normalize_input : bool
             If true, scales the input from range (0, 1) to the range the
             pretrained Inception network expects, namely (-1, 1)
         requires_grad : bool
-            If true, parameters of the model require gradients. Possibly useful
+            If true, parameters of the network require gradients. Possibly useful
             for finetuning the network
         """
         super(InceptionV3, self).__init__()
@@ -128,11 +128,11 @@ class InceptionV3(nn.Module):
 
 
 def fid_inception_v3():
-    """Build pretrained Inception model for FID computation
-    The Inception model for FID computation uses a different set of weights
+    """Build pretrained Inception network for FID computation
+    The Inception network for FID computation uses a different set of weights
     and has a slightly different structure than torchvision's Inception.
     This method first constructs torchvision's Inception and then patches the
-    necessary parts that are different in the FID Inception model.
+    necessary parts that are different in the FID Inception network.
     """
     inception = models.inception_v3(num_classes=1008,
                                     aux_logits=False,
@@ -263,7 +263,7 @@ class FIDInceptionE_2(models.inception.InceptionE):
         ]
         branch3x3dbl = torch.cat(branch3x3dbl, 1)
 
-        # Patch: The FID Inception model uses max pooling instead of average
+        # Patch: The FID Inception network uses max pooling instead of average
         # pooling. This is likely an error in this specific Inception
         # implementation, as other Inception models use average pooling here
         # (which matches the description in the paper).

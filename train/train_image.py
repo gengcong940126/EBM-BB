@@ -28,14 +28,14 @@ class EBM_0GP(nn.Module):
         self.save_dir = args.save_dir
         self.result_dir = args.result_dir
         self.log_dir = args.log_dir
-        self.model_name = args.gan_type
+        self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
         if args.input_size==32:
-            module = __import__('model.DCGAN')
+            module = __import__('network.DCGAN', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(self.d)
         elif args.input_size==64:
-            module = __import__('model.Resnet')
+            module = __import__('network.Resnet', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(args,self.d)
         self.to(self.device)
@@ -87,10 +87,7 @@ class EBM_0GP(nn.Module):
                 z_train.requires_grad_()
                 fake= self.gen(z_train)
                 d_fake_g = self.disc(fake)
-                if args.train_mode == 'eval':
-                    H=self.compute_entropy_s(z_train)
-                elif args.train_mode == 'acc':
-                    H = self.compute_entropy_acc(z_train)
+                H=self.compute_entropy_s(z_train)
                 g_loss = d_fake_g.mean()-H.mean()*args.H_weight
                 g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item()])
                 optimizer_g.zero_grad()
@@ -265,11 +262,11 @@ class EBM_BB(nn.Module):
         self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
         if args.input_size == 32:
-            module = __import__('model.DCGAN', fromlist=['something'])
+            module = __import__('network.DCGAN', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(self.d)
         elif args.input_size == 64:
-            module = __import__('model.Resnet', fromlist=['something'])
+            module = __import__('network.Resnet', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(args, self.d)
         self.to(self.device)
@@ -279,7 +276,6 @@ class EBM_BB(nn.Module):
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
     def trainer(self, data_loader, test_loader, iters=50):
-        self.load()
         optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, 0.9), lr=args.lrd)
         optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, 0.9), lr=args.lrg)
         sum_loss_d = 0
@@ -377,10 +373,7 @@ class EBM_BB(nn.Module):
             JV = torch.stack(JV, -1).flatten(1, 3)
         else:
             JV = torch.stack(JV, -1)
-        try:
-            v_min = torch.svd(JV).V[:, :, -1:].to(device)
-        except:  # torch.svd may have convergence issues for GPU and CPU.
-            v_min = torch.svd(JV+ 1e-4 * JV.mean() * torch.rand(JV.shape).to(device)).V[:, :, -1:].to(device)
+        v_min = torch.svd(JV).V[:, :, -1:].to(device)
         p_op = V[:, :, -2:].bmm(v_min[:, -2:]).squeeze(-1)
         p_op_norm = p_op.norm(2, dim=-1)
         p.data.index_copy_(0, torch.where(~p_op_norm.isnan())[0], p_op[~p_op_norm.isnan()].detach())
@@ -414,10 +407,8 @@ class EBM_BB(nn.Module):
             # self.v.data.copy_(v_op)
             Jv = torch.autograd.grad(intermediate[0], projection, v.detach(), create_graph=True)[0]
             mu = Jv.norm(2, dim=list(range(1, size))) / (v.norm(2, dim=-1))
-        try:
-            est = z.shape[-1] * torch.log(mu)
-        except:
-            est = z.shape[-1] * torch.log(mu0)
+
+        est = z.shape[-1] * torch.log(mu)
         logpGz = logpz - est
         deri = torch.autograd.grad(-logpGz, z, torch.ones_like(logpGz, requires_grad=True), retain_graph=True)[0]
         # gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
@@ -425,7 +416,7 @@ class EBM_BB(nn.Module):
         Jv0 = torch.autograd.grad(intermediate[0], projection, v0.detach(), retain_graph=True)[0].flatten(start_dim=1)
         # Jv0 = Jv0 / v0.norm(2, dim=-1, keepdim=True)
         self.gen.train()
-        return gp, Jv0, est.mean()
+        return gp, Jv0, est[torch.where(~est.isnan()) and torch.where(~est.isinf())].mean()
     def compute_gp_acc(self,z):
         z.requires_grad_()
         self.gen.eval()
@@ -587,7 +578,7 @@ if __name__ == "__main__":
     parser.add_argument("--gp_weight", type=float, default=0.001)
     parser.add_argument("--H_weight", type=int, default=1)
     parser.add_argument('--save_dir', type=str, default='models',
-                        help='Directory name to save the model')
+                        help='Directory name to save the network')
     parser.add_argument('--result_dir', type=str, default='results', help='Directory name to save the generated images')
     parser.add_argument('--log_dir', type=str, default='logs', help='Directory name to save training logs')
     parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
@@ -654,7 +645,7 @@ if __name__ == "__main__":
     train_loader = torch.utils.data.DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True, drop_last=True)
     train_loader = dict(train=data.InfiniteDataLoader(train_loader))
     test_loader = torch.utils.data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    # Fit model
+    # Fit network
     model= utils.get_model(args.EBM_type)(args, device)
     if args.mode == 'train':
         iters = args.epoch * len(train_loader['train'])+1

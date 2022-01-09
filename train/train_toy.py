@@ -565,7 +565,7 @@ if __name__ == "__main__":
     parser.add_argument("--H_weight", type=float, default=1)
     parser.add_argument("--detach", type=str, default=False)
     parser.add_argument('--save_dir', type=str, default='models',
-                        help='Directory name to save the model')
+                        help='Directory name to save the network')
     parser.add_argument('--result_dir', type=str, default='results', help='Directory name to save the generated images')
     parser.add_argument('--log_dir', type=str, default='logs', help='Directory name to save training logs')
     parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
