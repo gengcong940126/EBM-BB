@@ -43,10 +43,9 @@ class EnergyModel(nn.Module):
                 nn.LeakyReLU(0.1, inplace=True),
             )
             self.expand = nn.Linear(4 * 4 * dim, 1)
-        self.l = nn.Linear(1, 1, bias=False)
     def forward(self, x):
         out = self.main(x).view(x.size(0), -1)
-        out = self.l(self.expand(out)).squeeze(-1)
+        out = self.expand(out).squeeze(-1)
         return out
 
 class Generator(nn.Module):

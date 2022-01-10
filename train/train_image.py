@@ -276,8 +276,8 @@ class EBM_BB(nn.Module):
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
     def trainer(self, data_loader, test_loader, iters=50):
-        optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, 0.9), lr=args.lrd)
-        optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, 0.9), lr=args.lrg)
+        optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, args.beta), lr=args.lrd,eps=1e-6)
+        optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, args.beta), lr=args.lrg,eps=1e-6)
         sum_loss_d = 0
         sum_loss_g = 0
         self.writer = SummaryWriter(log_dir=self.log_dir)
@@ -301,7 +301,7 @@ class EBM_BB(nn.Module):
                                     allow_unused=True, create_graph=True)[0]
                 gradients = gradients.flatten(start_dim=1)
                 gp, Jv, H= self.compute_gp(z_train)
-                gp_loss = (((gradients * Jv.detach()).sum(-1) - gp.detach()) ** 2).mean() * 0.5
+                gp_loss = (((gradients * Jv.detach()).sum(-1) - gp.detach()) ** 2).mean()*0.5
                 if args.ada == True:
                     gp_weight = 0.7 * (2307 + iteration) ** (-0.55)
                     D_loss = (d_real - d_fake).mean() + (F.relu(gp_weight*gp_loss- args.thre))
@@ -354,7 +354,7 @@ class EBM_BB(nn.Module):
 
     def RaRitz(self,v, r, p, intermediate, projection, device):
         JV = []
-        r = r / (r.mean(-1, True))
+        r = r / (r.mean(-1, True)+1e-5)
         if p.norm(2, 1).min() == 0:
             p = torch.randn((p.shape[0], p.shape[-1]))
         V = torch.stack((v, r, p), -1)
@@ -395,26 +395,24 @@ class EBM_BB(nn.Module):
         intermediate = torch.autograd.grad(fake_eval, z, projection, create_graph=True)
         Jv = torch.autograd.grad(intermediate[0], projection, v, retain_graph=True)[0]
         size = len(Jv.shape)
-        # Jv=J.bmm(self.v.unsqueeze(-1)).squeeze()
-        mu0 = Jv.norm(2, dim=list(range(1, size))) / v.norm(2, dim=-1)
-        mu=mu0.clone()
+
+        mu = Jv.norm(2, dim=list(range(1, size))) / v.norm(2, dim=-1)
         for i in range(args.ssv_iter):
             JTJv = (Jv.detach() * fake_eval).sum(list(range(1, size)), True)
             r = torch.autograd.grad(JTJv, z, torch.ones_like(JTJv, requires_grad=True), retain_graph=True)[0] \
                 - (mu ** 2).unsqueeze(-1) * v
             v, p = self.RaRitz(v, r, p, intermediate[0], projection, device)
-            # v_op_norm = v.norm(2, dim=-1)
-            # self.v.data.copy_(v_op)
+
             Jv = torch.autograd.grad(intermediate[0], projection, v.detach(), create_graph=True)[0]
             mu = Jv.norm(2, dim=list(range(1, size))) / (v.norm(2, dim=-1))
 
         est = z.shape[-1] * torch.log(mu)
         logpGz = logpz - est
         deri = torch.autograd.grad(-logpGz, z, torch.ones_like(logpGz, requires_grad=True), retain_graph=True)[0]
-        # gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
+        #gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
         gp = (deri * v0).sum(-1)
         Jv0 = torch.autograd.grad(intermediate[0], projection, v0.detach(), retain_graph=True)[0].flatten(start_dim=1)
-        # Jv0 = Jv0 / v0.norm(2, dim=-1, keepdim=True)
+        #Jv0 = Jv0 / v0.norm(2, dim=-1, keepdim=True)
         self.gen.train()
         return gp, Jv0, est[torch.where(~est.isnan()) and torch.where(~est.isinf())].mean()
     def compute_gp_acc(self,z):
@@ -529,8 +527,8 @@ class EBM_BB(nn.Module):
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_g.pkl'))
 
     def load(self):
-        pkl_path_d = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641558437/epoch003_d.pkl'
-        pkl_path_g = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641558437/epoch003_g.pkl'
+        pkl_path_d = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641761825/epoch099_d.pkl'
+        pkl_path_g = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641761825/epoch099_g.pkl'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
 
@@ -540,7 +538,7 @@ if __name__ == "__main__":
     """
     Usage:
 
-        export CUDA_VISIBLE_DEVICES=1
+        export CUDA_VISIBLE_DEVICES=0
         export PORT=6006
         export CUDA_HOME=/opt/cuda/cuda-11.0
         export TIME_STR=1
@@ -551,7 +549,7 @@ if __name__ == "__main__":
     :return:
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--EBM_type', type=str, default='EBM_BB',
@@ -561,17 +559,18 @@ if __name__ == "__main__":
                         help='The name of dataset')
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'],help='mode')
-    parser.add_argument("--seed", type=int, default=23)
+    parser.add_argument("--seed", type=int, default=25)
     parser.add_argument("--bn", type=bool, default=False)
-    parser.add_argument("--sn", type=bool, default=True)
-    parser.add_argument('--epoch', type=int, default=100, help='The number of epochs to run')
+    parser.add_argument("--sn", type=bool, default=False)
+    parser.add_argument('--epoch', type=int, default=130, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of batch')
     parser.add_argument('--input_size', type=int, default=32, help='The size of input image')
     parser.add_argument("--lrd", type=float, default=2e-4)
     parser.add_argument("--lrg", type=float, default=2e-4)
-    parser.add_argument("--ada", type=bool, default=True)
-    parser.add_argument("--thre", type=float, default=0)
+    parser.add_argument("--beta", type=float, default=0.9)
+    parser.add_argument("--ada", type=bool, default=False)
+    parser.add_argument("--thre", type=float, default=1)
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
     parser.add_argument("--ssv_iter", type=int, default=2)
