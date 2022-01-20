@@ -576,19 +576,19 @@ if __name__ == "__main__":
     if args.mode == 'train' and utils.is_debugging() == False:
         time = int(time.time())
         args.save_dir = os.path.join(args.save_dir + '/' + args.dataset + '/'
-                                     + args.gan_type + '/%02d' % args.energy_model_iters + '/%03d' % time)
+                                     + args.EBM_type + '/%02d' % args.energy_model_iters + '/%03d' % time)
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
 
         # --result_dir
         args.result_dir = os.path.join(args.result_dir + '/' + args.dataset + '/'
-                                       + args.gan_type + '/%02d' % args.energy_model_iters + '/%03d' % time)
+                                       + args.EBM_type + '/%02d' % args.energy_model_iters + '/%03d' % time)
         if not os.path.exists(args.result_dir):
             os.makedirs(args.result_dir)
 
-        # --result_dir
+        # --log_dir
         args.log_dir = os.path.join(args.log_dir + '/' + args.dataset + '/'
-                                    + args.gan_type + '/%02d' % args.energy_model_iters + '/tb_%03d' % time)
+                                    + args.EBM_type + '/%02d' % args.energy_model_iters + '/tb_%03d' % time)
         if not os.path.exists(args.log_dir):
             os.makedirs(args.log_dir)
 
