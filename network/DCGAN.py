@@ -6,43 +6,24 @@ from stochman import nnj
 class EnergyModel(nn.Module):
     def __init__(self, args, dim=512):
         super().__init__()
-        if args.sn==True:
-            self.main = nn.Sequential(
-                nn.utils.spectral_norm(nn.Conv2d(3, dim // 8, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 8, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 8, dim // 4, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 4, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 4, dim // 2, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim // 2, 4, 2, 1)),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.utils.spectral_norm(nn.Conv2d(dim // 2, dim, 3, 1, 1)),
-                nn.LeakyReLU(0.1, inplace=True)
-            )
-            self.expand = nn.utils.spectral_norm(nn.Linear(4 * 4 * dim, 1))
 
-        else:
-            self.main = nn.Sequential(
-                nn.Conv2d(3, dim // 8, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 8, dim // 8, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 8, dim // 4, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 4, dim // 4, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 4, dim // 2, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 2, dim // 2, 4, 2, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-                nn.Conv2d(dim // 2, dim, 3, 1, 1),
-                nn.LeakyReLU(0.1, inplace=True),
-            )
-            self.expand = nn.Linear(4 * 4 * dim, 1)
+        self.main = nn.Sequential(
+            nn.Conv2d(3, dim // 8, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 8, dim // 8, 4, 2, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 8, dim // 4, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 4, dim // 4, 4, 2, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 4, dim // 2, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 2, dim // 2, 4, 2, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(dim // 2, dim, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.expand = nn.Linear(4 * 4 * dim, 1)
     def forward(self, x):
         out = self.main(x).view(x.size(0), -1)
         out = self.expand(out).squeeze(-1)
