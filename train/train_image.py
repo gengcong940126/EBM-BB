@@ -98,12 +98,8 @@ class EBM_0GP(nn.Module):
             sum_loss_g += g_loss_mean.item() * len(data)
 
             if iteration % 250 == 0:
-                self.writer.add_scalars('d_logit_mean', {'r_logit_mean': d_real_mean,
-                                                    'f_logit_mean': d_fake_mean,
-                                                    'G_f_logit_mean': d_fake_g_mean}, iteration)
                 self.writer.add_scalar('D_loss', D_loss_mean, iteration)
                 self.writer.add_scalar('g_loss', g_loss_mean, iteration)
-                self.writer.add_scalar('gp_loss', gp_loss_mean, iteration)
                 self.writer.add_scalar('H', H_mean, iteration)
             if iteration % (5*len(data_loader)) == 0:
                 with torch.no_grad():
@@ -330,12 +326,8 @@ class EBM_BB(nn.Module):
             sum_loss_g += g_loss_mean.item() * len(data)
 
             if iteration % 250 == 0:
-                self.writer.add_scalars('d_logit_mean', {'r_logit_mean': d_real_mean,
-                                                    'f_logit_mean': d_fake_mean,
-                                                    'G_f_logit_mean': d_fake_g_mean}, iteration)
                 self.writer.add_scalar('D_loss', D_loss_mean, iteration)
                 self.writer.add_scalar('g_loss', g_loss_mean, iteration)
-                self.writer.add_scalar('gp_loss', gp_loss_mean, iteration)
                 self.writer.add_scalar('H', H_mean, iteration)
             if iteration % (5*len(data_loader)) == 0:
                 with torch.no_grad():
