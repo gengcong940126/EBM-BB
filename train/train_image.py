@@ -166,6 +166,7 @@ class EBM_0GP(nn.Module):
             mu = Jv.norm(2, dim=list(range(1, size)))
         est = z.shape[-1]  * torch.log(mu)
         H = est.mean()
+        self.gen.train()
         return H
     def compute_entropy_acc(self, z):
         self.gen.eval()
@@ -445,6 +446,7 @@ class EBM_BB(nn.Module):
             mu = Jv.norm(2, dim=list(range(1, size)))
         est = z.shape[-1]  * torch.log(mu)
         H = est.mean()
+        self.gen.train()
         return H
     def compute_entropy_acc(self, z):
         self.gen.eval()
