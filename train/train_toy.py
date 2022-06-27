@@ -399,9 +399,14 @@ class EBM_BB(nn.Module):
             z).sum(1)
         fake, J = self.gen(z, True)
         v = torch.randn(z.shape).to(self.device)
-        jtj = torch.bmm(torch.transpose(J, -2, -1), J)
-        detjtj = 0.5 * torch.slogdet(jtj)[1]
-        logpGz = logpz - detjtj
+        if args.train_mode == 'acc':
+            jtj = torch.bmm(torch.transpose(J, -2, -1), J)
+            detjtj = 0.5 * torch.slogdet(jtj)[1]
+            logpGz = logpz - detjtj
+        elif args.train_mode == 'mins':
+            s = torch.svd(J).S[:, -1:]
+            H = self.d * torch.log(s)
+            logpGz = logpz - H.squeeze()
         deri = torch.autograd.grad(-logpGz, z, torch.ones_like(logpGz, requires_grad=True), allow_unused=True,
                                    create_graph=True)[0]
         gp = (deri * v).sum(-1)
