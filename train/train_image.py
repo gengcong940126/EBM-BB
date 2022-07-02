@@ -630,7 +630,7 @@ if __name__ == "__main__":
                         help='The name of dataset')
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'],help='mode')
-    parser.add_argument("--seed", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=-1)
     parser.add_argument("--bn", type=bool, default=False)
     parser.add_argument("--sn", type=bool, default=False)
     parser.add_argument("--resume", type=bool, default=False)
