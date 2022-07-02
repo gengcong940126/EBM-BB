@@ -30,6 +30,8 @@ class EBM_0GP(nn.Module):
         self.log_dir = args.log_dir
         self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
+        self.optimizers = []
+        self.epoch = 0
         if args.input_size==32:
             module = __import__('network.DCGAN', fromlist=['something'])
             self.disc = module.EnergyModel(args)
@@ -38,23 +40,33 @@ class EBM_0GP(nn.Module):
             module = __import__('network.Resnet', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(args,self.d)
+        with open("{}/args.txt".format(args.result_dir), 'a') as f:
+            print('\n', self.disc, '\n', self.gen, file=f)
         self.to(self.device)
 
         if args.ngpu > 1:
             gpu_ids = range(args.ngpu)
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
+        self.optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, args.beta), lr=args.lrd, eps=1e-6)
+        self.optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, args.beta), lr=args.lrg, eps=1e-6)
+        self.optimizers.append(self.optimizer_d)
+        self.optimizers.append(self.optimizer_g)
     def trainer(self, data_loader, test_loader, iters=50):
-        optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, 0.9), lr=args.lrd)
-        optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, 0.9), lr=args.lrg)
+        if args.resume:
+            self.load()
         sum_loss_d = 0
         sum_loss_g = 0
         self.writer = SummaryWriter(log_dir=self.log_dir)
         for iteration in range(iters):
-            epoch = (iteration) // len(data_loader)
+            epoch = (iteration) // len(data_loader)+self.epoch
             e_costs = []
             g_costs = []
             #energy function
+            for name, param in self.disc.named_parameters():
+                param.requires_grad = True
+            for name, param in self.gen.named_parameters():
+                param.requires_grad = False
             for i in range(args.energy_model_iters):
                 data = data_loader.next()[0].cuda()
                 data = data.to(self.device)
@@ -75,13 +87,17 @@ class EBM_0GP(nn.Module):
                 gp_loss = (gradients.norm(2, dim=1) ** 2).mean()
                 D_loss = (d_real - d_fake).mean() + gp_loss * args.gp_weight
                 e_costs.append([d_real.mean().item(), d_fake.mean().item(),D_loss.item(), gp_loss.item()])
-                optimizer_d.zero_grad()
+                self.optimizer_d.zero_grad()
                 D_loss.backward()
-                optimizer_d.step()
+                self.optimizer_d.step()
             d_real_mean, d_fake_mean,  D_loss_mean, gp_loss_mean= np.mean(e_costs[-args.energy_model_iters:], 0)
-            sum_loss_d += D_loss_mean.item() * len(data)
+            sum_loss_d += D_loss_mean.item()
 
             # generator
+            for name, param in self.disc.named_parameters():
+                param.requires_grad = False
+            for name, param in self.gen.named_parameters():
+                param.requires_grad = True
             for i in range(args.generator_iters):
                 z_train = torch.randn((data.shape[0], self.d)).to(self.device)
                 z_train.requires_grad_()
@@ -90,12 +106,12 @@ class EBM_0GP(nn.Module):
                 H=self.compute_entropy_s(z_train)
                 g_loss = d_fake_g.mean()-H.mean()*args.H_weight
                 g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item()])
-                optimizer_g.zero_grad()
+                self.optimizer_g.zero_grad()
                 g_loss.backward()
-                optimizer_g.step()
+                self.optimizer_g.step()
             d_fake_g_mean, g_loss_mean, H_mean\
                 = np.mean(g_costs[-args.generator_iters:], 0)
-            sum_loss_g += g_loss_mean.item() * len(data)
+            sum_loss_g += g_loss_mean.item()
 
             if iteration % 250 == 0:
                 self.writer.add_scalar('D_loss', D_loss_mean, iteration)
@@ -107,12 +123,10 @@ class EBM_0GP(nn.Module):
             if iteration % (10*len(data_loader)) == 0:
                     self.eval_metric_score(iteration,test_loader)
             if (iteration) % (len(data_loader)) == 0:
-                avg_loss_d = sum_loss_d / len(data_loader) / args.batch_size
-                avg_loss_g = sum_loss_g / len(data_loader) / args.batch_size
+                avg_loss_d = sum_loss_d / (iteration+1)
+                avg_loss_g = sum_loss_g / (iteration+1)
                 print('(MEAN) ====> Epoch: {} Average loss d: {:.4f}'.format(epoch, avg_loss_d))
                 print('(MEAN) ====> Epoch: {} Average loss g: {:.4f}'.format(epoch, avg_loss_g))
-                sum_loss_d = 0
-                sum_loss_g = 0
             if (iteration+1) % (20*len(data_loader)) == 0:
                 self.save(epoch)
 
@@ -239,12 +253,36 @@ class EBM_0GP(nn.Module):
     def save(self, epoch):
         torch.save(self.disc.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_d.pkl'))
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_g.pkl'))
+        state = {'epoch': epoch, 'optimizers': []}
+        for o in self.optimizers:
+            state['optimizers'].append(o.state_dict())
 
+        save_path = os.path.join(self.save_dir, 'epoch%03d' % epoch + '.state')
+
+        # avoid occasional writing errors
+        retry = 3
+        while retry > 0:
+            try:
+                torch.save(state, save_path)
+            except Exception as e:
+                print(f'Save training state error: {e}, remaining retry times: {retry - 1}')
+                time.sleep(1)
+            else:
+                break
+            finally:
+                retry -= 1
+        if retry == 0:
+            print(f'Still cannot save {save_path}. Just ignore it.')
     def load(self):
         pkl_path_d = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/1617651553/epoch029_d.pkl'
         pkl_path_g = '/home/congen/code/geoml_gan/models/cifar10/EBM/128/1617651553/epoch029_g.pkl'
+        pkl_path_state = '/home/congen/code/EBM-BB-exp/models/mnist/EBM_BB/032/01/1656494414/epoch060.state'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
+        resume_optimizers = torch.load(pkl_path_state)['optimizers']
+        for i, o in enumerate(resume_optimizers):
+            self.optimizers[i].load_state_dict(o)
+        self.epoch = torch.load(pkl_path_state)['epoch']
 
 @utils.register_model(name='EBM_BB')
 class EBM_BB(nn.Module):
@@ -258,43 +296,54 @@ class EBM_BB(nn.Module):
         self.log_dir = args.log_dir
         self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d)).to(self.device)
+        self.optimizers = []
+        self.epoch=0
         if args.input_size == 32:
             module = __import__('network.DCGAN', fromlist=['something'])
-            self.disc = module.EnergyModel(args)
+            self.disc = module.EnergyModel()
             self.gen = module.Generator(self.d)
         elif args.input_size == 64:
             module = __import__('network.Resnet', fromlist=['something'])
             self.disc = module.EnergyModel(args)
             self.gen = module.Generator(args, self.d)
+        with open("{}/args.txt".format(args.result_dir), 'a') as f:
+            print('\n', self.disc, '\n', self.gen, file=f)
         self.to(self.device)
 
         if args.ngpu > 1:
             gpu_ids = range(args.ngpu)
             self.gen=nn.DataParallel(self.gen,device_ids=gpu_ids)
             self.disc = nn.DataParallel(self.disc, device_ids=gpu_ids)
+        self.optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, args.beta), lr=args.lrd, eps=1e-6)
+        self.optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, args.beta), lr=args.lrg, eps=1e-6)
+        self.optimizers.append(self.optimizer_d)
+        self.optimizers.append(self.optimizer_g)
     def trainer(self, data_loader, test_loader, iters=50):
-        optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, args.beta), lr=args.lrd,eps=1e-6)
-        optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, args.beta), lr=args.lrg,eps=1e-6)
+        if args.resume:
+            self.load()
         sum_loss_d = 0
         sum_loss_g = 0
         self.writer = SummaryWriter(log_dir=self.log_dir)
         for iteration in range(iters):
-            epoch = (iteration) // len(data_loader)
+            epoch = (iteration) // len(data_loader)+self.epoch
             e_costs = []
             g_costs = []
             #energy function
+            for name, param in self.disc.named_parameters():
+                param.requires_grad = True
+            for name, param in self.gen.named_parameters():
+                param.requires_grad = False
             for i in range(args.energy_model_iters):
                 data = data_loader.next()[0].cuda()
                 data = data.to(self.device)
                 data.requires_grad_()
                 z_train = torch.randn((data.shape[0], self.d)).to(self.device)
                 G_z = self.gen(z_train)
-                G_z_detach=G_z.detach()
-                G_z_detach.requires_grad_()
+                G_z.requires_grad_()
                 d_real = self.disc(data)
-                d_fake = self.disc(G_z_detach)
+                d_fake = self.disc(G_z)
                 gradients = torch.autograd.grad(outputs=d_fake,
-                            inputs=G_z_detach, grad_outputs=torch.ones_like(d_fake),
+                            inputs=G_z, grad_outputs=torch.ones_like(d_fake),
                                     allow_unused=True, create_graph=True)[0]
                 gradients = gradients.flatten(start_dim=1)
                 gp, Jv, H= self.compute_gp(z_train)
@@ -306,25 +355,29 @@ class EBM_BB(nn.Module):
                     D_loss = (d_real - d_fake).mean() + (F.relu(args.gp_weight*gp_loss- args.thre))
 
                 e_costs.append([d_real.mean().item(), d_fake.mean().item(),D_loss.item(), gp_loss.item()])
-                optimizer_d.zero_grad()
+                self.optimizer_d.zero_grad()
                 D_loss.backward()
-                optimizer_d.step()
+                self.optimizer_d.step()
             d_real_mean, d_fake_mean,  D_loss_mean, gp_loss_mean= np.mean(e_costs[-args.energy_model_iters:], 0)
-            sum_loss_d += D_loss_mean.item() * len(data)
+            sum_loss_d += D_loss_mean.item()
 
             # generator
+            for name, param in self.disc.named_parameters():
+                param.requires_grad = False
+            for name, param in self.gen.named_parameters():
+                param.requires_grad = True
             for i in range(args.generator_iters):
-                z_train = torch.randn((data.shape[0], self.d)).to(self.device)
-                z_train.requires_grad_()
-                fake= self.gen(z_train)
+                z_train2 = torch.randn((data.shape[0], self.d)).to(self.device)
+                z_train2.requires_grad_()
+                fake= self.gen(z_train2)
                 d_fake_g = self.disc(fake)
                 g_loss = d_fake_g.mean()-H*args.H_weight
                 g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.item()])
-                optimizer_g.zero_grad()
+                self.optimizer_g.zero_grad()
                 g_loss.backward()
-                optimizer_g.step()
+                self.optimizer_g.step()
             d_fake_g_mean, g_loss_mean, H_mean= np.mean(g_costs[-args.generator_iters:], 0)
-            sum_loss_g += g_loss_mean.item() * len(data)
+            sum_loss_g += g_loss_mean.item()
 
             if iteration % 250 == 0:
                 self.writer.add_scalar('D_loss', D_loss_mean, iteration)
@@ -333,21 +386,19 @@ class EBM_BB(nn.Module):
             if iteration % (5*len(data_loader)) == 0:
                 with torch.no_grad():
                     self.visualize_results(epoch)
-            if iteration % (10*len(data_loader)) == 0:
+            if (iteration+1) % (10*len(data_loader)) == 0:
                     self.eval_metric_score(iteration,test_loader)
             if (iteration) % (len(data_loader)) == 0:
-                avg_loss_d = sum_loss_d / len(data_loader) / args.batch_size
-                avg_loss_g = sum_loss_g / len(data_loader) / args.batch_size
+                avg_loss_d = sum_loss_d / (iteration+1)
+                avg_loss_g = sum_loss_g / (iteration+1)
                 print('(MEAN) ====> Epoch: {} Average loss d: {:.4f}'.format(epoch, avg_loss_d))
                 print('(MEAN) ====> Epoch: {} Average loss g: {:.4f}'.format(epoch, avg_loss_g))
-                sum_loss_d = 0
-                sum_loss_g = 0
             if (iteration+1) % (20*len(data_loader)) == 0:
                 self.save(epoch)
 
     def RaRitz(self,v, r, p, intermediate, projection, device):
         JV = []
-        r = r / (r.mean(-1, True)+1e-5)
+        r = r / r.mean(-1, True)
         if p.norm(2, 1).min() == 0:
             p = torch.randn((p.shape[0], p.shape[-1]))
         V = torch.stack((v, r, p), -1)
@@ -519,12 +570,38 @@ class EBM_BB(nn.Module):
     def save(self, epoch):
         torch.save(self.disc.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_d.pkl'))
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch+'_g.pkl'))
+        state = {'epoch': epoch, 'optimizers': []}
+        for o in self.optimizers:
+            state['optimizers'].append(o.state_dict())
+
+        save_path = os.path.join(self.save_dir, 'epoch%03d' % epoch + '.state')
+
+        # avoid occasional writing errors
+        retry = 3
+        while retry > 0:
+            try:
+                torch.save(state, save_path)
+            except Exception as e:
+                print(f'Save training state error: {e}, remaining retry times: {retry - 1}')
+                time.sleep(1)
+            else:
+                break
+            finally:
+                retry -= 1
+        if retry == 0:
+            print(f'Still cannot save {save_path}. Just ignore it.')
 
     def load(self):
         pkl_path_d = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641761825/epoch099_d.pkl'
         pkl_path_g = '/home/congen/code/EBM-BB/models/cifar10/EBM_BB/128/01/1641761825/epoch099_g.pkl'
+        pkl_path_state = '/home/congen/code/EBM-BB-exp/models/mnist/EBM_BB/032/01/1656494414/epoch060.state'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
+        resume_optimizers = torch.load(pkl_path_state)['optimizers']
+        for i, o in enumerate(resume_optimizers):
+            self.optimizers[i].load_state_dict(o)
+        self.epoch = torch.load(pkl_path_state)['epoch']
+
 
 
 
@@ -532,7 +609,7 @@ if __name__ == "__main__":
     """
     Usage:
 
-        export CUDA_VISIBLE_DEVICES=0
+        export CUDA_VISIBLE_DEVICES=2
         export PORT=6006
         export CUDA_HOME=/opt/cuda/cuda-11.0
         export TIME_STR=1
@@ -553,18 +630,19 @@ if __name__ == "__main__":
                         help='The name of dataset')
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train',  'ebmpr'],help='mode')
-    parser.add_argument("--seed", type=int, default=25)
+    parser.add_argument("--seed", type=int, default=2)
     parser.add_argument("--bn", type=bool, default=False)
     parser.add_argument("--sn", type=bool, default=False)
-    parser.add_argument('--epoch', type=int, default=130, help='The number of epochs to run')
+    parser.add_argument("--resume", type=bool, default=False)
+    parser.add_argument('--epoch', type=int, default=260, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of latent space')
     parser.add_argument('--input_size', type=int, default=32, help='The size of input image')
-    parser.add_argument("--lrd", type=float, default=2e-4)
-    parser.add_argument("--lrg", type=float, default=2e-4)
-    parser.add_argument("--beta", type=float, default=0.9)
+    parser.add_argument("--lrd", type=float, default=5e-5)
+    parser.add_argument("--lrg", type=float, default=5e-5)
+    parser.add_argument("--beta", type=float, default=0.999)
     parser.add_argument("--ada", type=bool, default=False)
-    parser.add_argument("--thre", type=float, default=1)
+    parser.add_argument("--thre", type=float, default=0)
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
     parser.add_argument("--ssv_iter", type=int, default=2)
@@ -579,7 +657,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     # --save_dir
-
+    args.seed = utils.setup_seed(args.seed)
     if args.mode == 'train' and utils.is_debugging() == False:
         time = int(time.time())
         args.save_dir = os.path.join(args.save_dir + '/' + args.dataset + '/'
@@ -631,7 +709,7 @@ if __name__ == "__main__":
         assert args.batch_size >= 1
     except:
         print('batch size must be larger than or equal to one')
-    utils.setup_seed(args.seed)
+
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     dataset_train = data.LoadDataset(args,train=True)
     dataset_test = data.LoadDataset(args,train=False)

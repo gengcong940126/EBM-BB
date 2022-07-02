@@ -135,7 +135,7 @@ class EBM_0GP(nn.Module):
         return H.mean()
 
     def plt_toy_density(self, logdensity, ax, npts=100,
-                        title="$q(x)$", device="cpu", low=-4, high=4, exp=True):
+                        title="$q(x)$", device="cpu", low=-4, high=4, exp=True,temp=0.1):
         """
         Plot density of toy data.
         """
@@ -147,7 +147,7 @@ class EBM_0GP(nn.Module):
         logpx = logdensity(x).squeeze()
 
         if exp:
-            logpx = logpx
+            logpx = logpx*temp
             logpx = logpx - logpx.logsumexp(0)
             px = np.exp(logpx.cpu().detach().numpy()).reshape(npts, npts)
             px = px / px.sum()
@@ -249,7 +249,7 @@ class Disc(nn.Module):
                 nn.Linear(dim, 1, bias=True))
         #self.apply(weights_init)
         self.l = nn.Linear(1, 1, bias=False)
-    def forward(self, x, return_fmap=False):
+    def forward(self, x):
         energy = self.main(x)
         out = self.l(energy)
         return out
@@ -283,23 +283,26 @@ class EBM_BB(nn.Module):
         self.model_name = args.EBM_type
         self.sample_z_ = torch.randn((self.batch_size, self.d))
         self.sample_z_ = self.sample_z_.to(self.device)
-
+        self.optimizers = []
+        self.epoch = 0
         self.disc = Disc()
         self.gen = gen()
+        with open("{}/args.txt".format(args.result_dir), 'a') as f:
+            print('\n', self.disc, '\n', self.gen, file=f)
+        self.optimizer_d = torch.optim.Adam(self.disc.parameters(), betas=(0.0, args.beta), lr=args.lrd, eps=1e-6)
+        self.optimizer_g = torch.optim.Adam(self.gen.parameters(), betas=(0.0, args.beta), lr=args.lrg, eps=1e-6)
+        self.optimizers.append(self.optimizer_d)
+        self.optimizers.append(self.optimizer_g)
         self.to(self.device)
 
-
     def trainer(self, iters=50):
-
-        optimizer_d = torch.optim.Adam(self.disc.parameters(), lr=args.lrd,
-                                           betas=(0.0, 0.9), eps=1e-6)
-        optimizer_g = torch.optim.Adam(self.gen.parameters(), lr=args.lrg,
-                                           betas=(0.0, 0.9), eps=1e-6)
+        if args.resume:
+            self.load()
         sum_loss_d = 0
         sum_loss_g = 0
         writer = SummaryWriter(log_dir=self.log_dir)
         for iteration in range(iters):
-            epoch = iteration
+            epoch = iteration+self.epoch
             e_costs = []
             g_costs = []
             #energy function
@@ -328,9 +331,9 @@ class EBM_BB(nn.Module):
                     D_loss = (d_real - d_fake).mean() + (F.relu(args.gp_weight*gp_loss- args.thre))
 
                 e_costs.append([d_real.mean().item(), d_fake.mean().item(), D_loss.item(), gp_loss.item()])
-                optimizer_d.zero_grad()
+                self.optimizer_d.zero_grad()
                 D_loss.backward()
-                optimizer_d.step()
+                self.optimizer_d.step()
 
             d_real_mean, d_fake_mean, D_loss_mean, gp_loss_mean = np.mean(e_costs[-args.energy_model_iters:], 0)
             sum_loss_d += D_loss_mean.item() * len(data)
@@ -352,9 +355,9 @@ class EBM_BB(nn.Module):
 
                 g_loss = d_fake_g.mean() - H * args.H_weight
 
-                optimizer_g.zero_grad()
+                self.optimizer_g.zero_grad()
                 g_loss.backward()
-                optimizer_g.step()
+                self.optimizer_g.step()
 
                 g_costs.append([d_fake_g.mean().item(), g_loss.item(), H.mean().item()])
 
@@ -425,7 +428,7 @@ class EBM_BB(nn.Module):
 
 
     def plt_toy_density(self, logdensity, ax, npts=100,
-                        title="$q(x)$", device="cpu", low=-4, high=4, exp=True):
+                        title="$q(x)$", device="cpu", low=-4, high=4, exp=True,temp=0.1):
         """
         Plot density of toy data.
         """
@@ -438,7 +441,7 @@ class EBM_BB(nn.Module):
         logpx = logdensity(x).squeeze()
 
         if exp:
-            logpx = logpx
+            logpx = logpx*temp
             logpx = logpx - logpx.logsumexp(0)
 
             px = np.exp(logpx.cpu().detach().numpy()).reshape(npts, npts)
@@ -482,15 +485,38 @@ class EBM_BB(nn.Module):
 
         torch.save(self.disc.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch + '_d.pkl'))
         torch.save(self.gen.state_dict(), os.path.join(self.save_dir, 'epoch%03d' % epoch + '_g.pkl'))
+        state = {'epoch': epoch, 'optimizers': []}
+        for o in self.optimizers:
+            state['optimizers'].append(o.state_dict())
 
+        save_path = os.path.join(self.save_dir, 'epoch%03d' % epoch + '.state')
+
+        # avoid occasional writing errors
+        retry = 3
+        while retry > 0:
+            try:
+                torch.save(state, save_path)
+            except Exception as e:
+                print(f'Save training state error: {e}, remaining retry times: {retry - 1}')
+                time.sleep(1)
+            else:
+                break
+            finally:
+                retry -= 1
+        if retry == 0:
+            print(f'Still cannot save {save_path}. Just ignore it.')
 
     def load(self):
 
         pkl_path_d = '/home/cong/code/geoml_gan/models/two_moon/EBM_upper_gp/01/1620923311/epoch19999_d.pkl'
         pkl_path_g = '/home/cong/code/geoml_gan/models/two_moon/EBM_upper_gp/01/1620923311/epoch19999_g.pkl'
-
+        pkl_path_state = '/home/congen/code/EBM-BB-exp/models/mnist/EBM_BB/032/01/1656494414/epoch060.state'
         self.disc.load_state_dict(torch.load(pkl_path_d))
         self.gen.load_state_dict(torch.load(pkl_path_g))
+        resume_optimizers = torch.load(pkl_path_state)['optimizers']
+        for i, o in enumerate(resume_optimizers):
+            self.optimizers[i].load_state_dict(o)
+        self.epoch = torch.load(pkl_path_state)['epoch']
 
 
     def compute_ebmpr(self):
@@ -538,14 +564,14 @@ if __name__ == "__main__":
     :return:
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '6'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     os.environ['CUDA_HOME'] = '/opt/cuda/cuda-10.2'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('--EBM_type', type=str, default='EBM_0GP',
+    parser.add_argument('--EBM_type', type=str, default='EBM_BB',
                         choices=['EBM_BB','EBM_0GP'],
                         help='The type of EBM')
-    parser.add_argument('--dataset', type=str, default='swiss_roll',
+    parser.add_argument('--dataset', type=str, default='two_moon',
                         choices=['swiss_roll',  'two_moon', '25gaussians'],
                         help='The name of dataset')
     parser.add_argument('--mode', type=str, default='train',
@@ -555,12 +581,13 @@ if __name__ == "__main__":
     parser.add_argument('--input_size', type=int, default=2, help='The size of input image')
     parser.add_argument('--energy_model_iters', type=int, default=1)
     parser.add_argument("--generator_iters", type=int, default=1)
-    parser.add_argument("--momentum", type=float, default=0.9)
+    parser.add_argument("--beta", type=float, default=0.9)
     parser.add_argument('--train_mode', type=str, default='mins',
                         choices=['acc',  'mins'],help='mode')
     parser.add_argument("--bn", type=bool, default=True)
-    parser.add_argument("--sn", type=bool, default=True)
-    parser.add_argument("--ada", type=bool, default=True)
+    parser.add_argument("--sn", type=bool, default=False)
+    parser.add_argument("--resume", type=bool, default=False)
+    parser.add_argument("--ada", type=bool, default=False)
     parser.add_argument("--thre", type=int, default=0)
     parser.add_argument("--lrd", type=float, default=2e-4)
     parser.add_argument("--lrg", type=float, default=2e-4)

@@ -4,7 +4,7 @@ from stochman import nnj
 
 
 class EnergyModel(nn.Module):
-    def __init__(self, args, dim=512):
+    def __init__(self, dim=512):
         super().__init__()
 
         self.main = nn.Sequential(
@@ -45,7 +45,7 @@ class Generator(nn.Module):
             nnj.ConvTranspose2d(dim // 4, dim // 8, 4, 2, 1),
             nnj.BatchNorm2d(dim // 8),
             nnj.ReLU(True),
-            nnj.ConvTranspose2d(dim // 8, 3, 3, 1, 1),
+            nnj.Conv2d(dim // 8, 3, 3, 1, 1),
             nnj.Tanh(),
         )
         #self.apply(utils.weights_init)

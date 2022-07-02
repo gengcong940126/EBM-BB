@@ -106,9 +106,9 @@ class LoadDataset(Dataset):
     def load_dataset(self):
 
         if self.dataset == 'cifar10':
-            self.data = datasets.CIFAR10(root='/home/congen/code/geoml_gan/data/cifar10',
+            self.data = datasets.CIFAR10(root='./data/cifar10',
                                 train=self.train,
-                                download=False)
+                                download=True)
 
         elif self.dataset =='animeface':
             mode = 'train' if self.train == True else 'valid'

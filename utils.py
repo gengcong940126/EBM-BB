@@ -7,12 +7,17 @@ _MODELS = {}
 
 
 def setup_seed(seed):
+    if seed == -1:
+        seed = random.randint(1,4096)
+        torch.backends.cudnn.benchmark, torch.backends.cudnn.deterministic = True, False
+    else:
+        torch.backends.cudnn.benchmark, torch.backends.cudnn.deterministic = False, True
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    return seed
 
 def is_debugging():
   import sys
