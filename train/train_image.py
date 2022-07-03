@@ -329,10 +329,6 @@ class EBM_BB(nn.Module):
             e_costs = []
             g_costs = []
             #energy function
-            for name, param in self.disc.named_parameters():
-                param.requires_grad = True
-            for name, param in self.gen.named_parameters():
-                param.requires_grad = False
             for i in range(args.energy_model_iters):
                 data = data_loader.next()[0].cuda()
                 data = data.to(self.device)
@@ -362,10 +358,6 @@ class EBM_BB(nn.Module):
             sum_loss_d += D_loss_mean.item()
 
             # generator
-            for name, param in self.disc.named_parameters():
-                param.requires_grad = False
-            for name, param in self.gen.named_parameters():
-                param.requires_grad = True
             for i in range(args.generator_iters):
                 z_train2 = torch.randn((data.shape[0], self.d)).to(self.device)
                 z_train2.requires_grad_()
@@ -453,10 +445,10 @@ class EBM_BB(nn.Module):
         est = z.shape[-1] * torch.log(mu)
         logpGz = logpz - est
         deri = torch.autograd.grad(-logpGz, z, torch.ones_like(logpGz, requires_grad=True), retain_graph=True)[0]
-        #gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
-        gp = (deri * v0).sum(-1)
+        gp = (deri * v0/v0.norm(2,dim=-1,keepdim=True)).sum(-1)
+        #gp = (deri * v0).sum(-1)
         Jv0 = torch.autograd.grad(intermediate[0], projection, v0.detach(), retain_graph=True)[0].flatten(start_dim=1)
-        #Jv0 = Jv0 / v0.norm(2, dim=-1, keepdim=True)
+        Jv0 = Jv0 / v0.norm(2, dim=-1, keepdim=True)
         self.gen.train()
         return gp, Jv0, est[torch.where(~est.isnan()) and torch.where(~est.isinf())].mean()
     def compute_gp_acc(self,z):
@@ -634,13 +626,13 @@ if __name__ == "__main__":
     parser.add_argument("--bn", type=bool, default=False)
     parser.add_argument("--sn", type=bool, default=False)
     parser.add_argument("--resume", type=bool, default=False)
-    parser.add_argument('--epoch', type=int, default=260, help='The number of epochs to run')
+    parser.add_argument('--epoch', type=int, default=130, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of latent space')
     parser.add_argument('--input_size', type=int, default=32, help='The size of input image')
-    parser.add_argument("--lrd", type=float, default=5e-5)
-    parser.add_argument("--lrg", type=float, default=5e-5)
-    parser.add_argument("--beta", type=float, default=0.999)
+    parser.add_argument("--lrd", type=float, default=2e-4)
+    parser.add_argument("--lrg", type=float, default=2e-4)
+    parser.add_argument("--beta", type=float, default=0.9)
     parser.add_argument("--ada", type=bool, default=False)
     parser.add_argument("--thre", type=float, default=0)
     parser.add_argument('--energy_model_iters', type=int, default=1)
