@@ -466,12 +466,12 @@ class EBM_BB(nn.Module):
         self.disc.cpu()
 
         ax = plt.subplot(1, 3, 2, aspect="equal")
-        self.plt_toy_density(lambda x: -self.disc.main(x), ax,
+        self.plt_toy_density(lambda x: -self.disc(x), ax,
                              low=-4, high=4,
                              title="p(x)")
 
         ax = plt.subplot(1, 3, 3, aspect="equal")
-        self.plt_toy_density(lambda x: -self.disc.main(x), ax,
+        self.plt_toy_density(lambda x: -self.disc(x), ax,
                              low=-4, high=4,
                              exp=False, title="log p(x)")
 
@@ -553,7 +553,7 @@ if __name__ == "__main__":
     """
     Usage:
 
-        export CUDA_VISIBLE_DEVICES=3
+        export CUDA_VISIBLE_DEVICES=0
         export PORT=6006
         export CUDA_HOME=/opt/cuda/cuda-10.2
         export TIME_STR=1
@@ -564,14 +564,14 @@ if __name__ == "__main__":
     :return:
     """
     if 'CUDA_VISIBLE_DEVICES' not in os.environ:
-        os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+        os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     os.environ['CUDA_HOME'] = '/opt/cuda/cuda-10.2'
     desc = "Pytorch implementation of EBM collections"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--EBM_type', type=str, default='EBM_BB',
                         choices=['EBM_BB','EBM_0GP'],
                         help='The type of EBM')
-    parser.add_argument('--dataset', type=str, default='two_moon',
+    parser.add_argument('--dataset', type=str, default='25gaussians',
                         choices=['swiss_roll',  'two_moon', '25gaussians'],
                         help='The name of dataset')
     parser.add_argument('--mode', type=str, default='train',
@@ -588,10 +588,10 @@ if __name__ == "__main__":
     parser.add_argument("--sn", type=bool, default=False)
     parser.add_argument("--resume", type=bool, default=False)
     parser.add_argument("--ada", type=bool, default=False)
-    parser.add_argument("--thre", type=int, default=0)
+    parser.add_argument("--thre", type=int, default=1)
     parser.add_argument("--lrd", type=float, default=2e-4)
     parser.add_argument("--lrg", type=float, default=2e-4)
-    parser.add_argument("--seed", type=int, default=60)
+    parser.add_argument("--seed", type=int, default=-1)
     parser.add_argument("--gp", type=str, default=False)
     parser.add_argument("--gp_weight", type=float, default=0.001)
     parser.add_argument("--H_weight", type=float, default=1)
@@ -604,6 +604,7 @@ if __name__ == "__main__":
     parser.add_argument('--benchmark_mode', type=bool, default=True)
 
     args = parser.parse_args()
+    args.seed = utils.setup_seed(args.seed)
     # --save_dir
     if args.mode == 'train' and utils.is_debugging() == False:
         time = int(time.time())
@@ -654,7 +655,6 @@ if __name__ == "__main__":
         assert args.batch_size >= 1
     except:
         print('batch size must be larger than or equal to one')
-    utils.setup_seed(args.seed)
     layers = [2, 100, 100, 2]
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
