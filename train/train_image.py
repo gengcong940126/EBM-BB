@@ -626,7 +626,7 @@ if __name__ == "__main__":
     parser.add_argument("--bn", type=bool, default=False)
     parser.add_argument("--sn", type=bool, default=False)
     parser.add_argument("--resume", type=bool, default=False)
-    parser.add_argument('--epoch', type=int, default=130, help='The number of epochs to run')
+    parser.add_argument('--epoch', type=int, default=260, help='The number of epochs to run')
     parser.add_argument('--batch_size', type=int, default=64, help='The size of batch')
     parser.add_argument('--z_dim', type=int, default=128, help='The size of latent space')
     parser.add_argument('--input_size', type=int, default=32, help='The size of input image')
