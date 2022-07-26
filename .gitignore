@@ -158,3 +158,9 @@ dmypy.json
 01/tb_1641832587/d_logit_mean/f_logit_mean/events.out.tfevents.1641832594.mnemosyne
 01/tb_1641832587/d_logit_mean/G_f_logit_mean/events.out.tfevents.1641832594.mnemosyne
 01/tb_1641832587/d_logit_mean/r_logit_mean/events.out.tfevents.1641832594.mnemosyne
+logs/cifar10/EBM_BB/128/01/tb_1656744621/events.out.tfevents.1656744627.mnemosyne
+results/cifar10/EBM_BB/128/01/1656744621/args.txt
+tb_1641832492/events.out.tfevents.1641832497.mnemosyne
+tb_1641832492/d_logit_mean/f_logit_mean/events.out.tfevents.1641832498.mnemosyne
+tb_1641832492/d_logit_mean/G_f_logit_mean/events.out.tfevents.1641832498.mnemosyne
+tb_1641832492/d_logit_mean/r_logit_mean/events.out.tfevents.1641832498.mnemosyne
